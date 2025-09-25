@@ -7,6 +7,8 @@
   **Arduino Nano**: Used as the microcontroller to control the nixie tube display.
 - **輝光管（IN-12 型號）**：作為時鐘顯示的主要元件，共需 6 支。  
   **Nixie Tube (IN-12 model)**: Main component for the clock display, requires 6 tubes.
+- **杜邦線 **：電路板到輝光管座的連接，共需 60條。  
+  **Dupont Wire**: connections from the circuit board to the Nixie tube sockets, a total of 60 pieces required.
 - **K155ID1 驅動晶片**：輝光管專用驅動晶片，共需 6 顆。  
   **K155ID1 Driver Chip**: A driver chip for nixie tubes, requires 6 chips.
 - **74HC595 移位寄存器**：擴展 Arduino 的 IO 腳位，共需 3 顆。  
@@ -224,6 +226,24 @@ In the first version of the wiring, there was no winding wire. Later, after repl
 
 ![S__37027921_0](https://github.com/user-attachments/assets/69445090-58d3-4d9c-9328-566a04181443)
 
+從底板到輝光管座的連接線，以下圖是我連接兩端的方式
+The connection wires from the baseboard to the Nixie tube socket are shown below:
+- 底部連接方式杜邦線將一端剪掉、鍍上錫，就能焊在PCB底座上
+Baseboard side: Cut off one end of the Dupont wire, tin it, and solder it to the PCB base.
+- 管座連接方式，杜邦線的外殼拆掉，再用熱縮管罩住就可以插上到管座上
+Socket side: Remove the plastic housing of the Dupont wire, cover it with heat-shrink tubing, and then insert it into the tube socket.
+<img width="862" height="565" alt="eb223592-8ba8-457f-9854-c33d29ecfc9a" src="https://github.com/user-attachments/assets/4f695c3f-baf9-43b5-b7eb-2124bc441480" />
+<img width="948" height="684" alt="1f7fa4b1-5d7b-4cc7-94fa-6bda2b46f75b" src="https://github.com/user-attachments/assets/5baf1146-16d0-439f-b30d-fbfdce6325a4" />
+
+- 杜邦線的顏色與數字的搭配(這點也可按照個人喜好，你也可以買單色的杜邦線，保持跟底座同樣的風格)，想說這樣如果顯示有錯誤的話，也比較好debug，我的杜邦線顏色是按照電阻的顏色來配的
+  杜邦線:黑棕紅橙黃綠藍紫黑白 對照管座顯示的1234567890 來接
+  Dupont wire color-to-number mapping (this can be arranged based on personal preference; you can also use single-color Dupont wires to keep the same style as the base). I chose resistor color coding so that if there’s a display error, it’s easier to debug.
+It’s recommended to buy a few extra wires in case some get damaged during soldering or cut too short. I bought about 70 wires.
+My Dupont wire colors follow the resistor color code: black, brown, red, orange, yellow, green, blue, purple, black, white — corresponding to the tube socket digits 1 2 3 4 5 6 7 8 9 0.
+<img width="1078" height="239" alt="80073179-0508-4deb-8b4e-f3b38d098fb8" src="https://github.com/user-attachments/assets/2d8e2137-b60d-486c-8389-3f08c4eaf1a1" />
+
+
+
 
 ## step 10. 製作按鍵 | Making the Buttons
 
@@ -284,7 +304,8 @@ Finally, take a look at the remaining photos.
 - PCB板, 記得先買管子, 如果想要大隻的管子也可以, 看起來更有復古感, 如果不是跟我一樣要買小管子的人, 要先買好管子、IC、Ａrduino 等等的主要模組, 大概算一下需要的PCB需要多大, 不然就是要買那種可以裁的PCB, 還有因為我買的板子的焊點金屬比較薄, 對不熟焊槍的人, 可能會容易把PCB的焊點弄起來, 可以買下圖這種較厚一點的PCB, 可能品質更好一點, 但還是去電子材料行看看, 也能問一下材料行的人
 ![截圖 2024-11-03 下午4 21 00](https://github.com/user-attachments/assets/ab93bfe6-eb22-4048-8389-c9adfc8a934d)
 - 辉光管*6 我買的是 IN-12型號, 因為1 隻就要60人民幣了, 台灣買更貴, 所以我是在淘寶買的, 大隻輝光管就看個人預算
-- 辉光管座*6
+- 辉光管座*6 
+- 杜邦線*60 建議多買幾條，有可能線焊壞、剪太短，我是買70~80條
 - K155ID1辉光管专用驱动*6
 - 74HC595*3
 - 微動開關*2 + 開關用的電阻*2
@@ -305,6 +326,8 @@ Finally, take a look at the remaining photos.
 - **PCB Board**: Make sure to purchase the tubes first. If you want larger tubes, account for their size when choosing a PCB. If not, calculate the PCB size based on your main components, like the tubes, ICs, and Arduino. or you can buy cuttable PCB. My PCB's solder points were quite thin, which may cause issues if you're not familiar with soldering, as they can lift off the board. You might want to get a thicker PCB, like the one shown below, for better quality. Visiting an electronics store and asking for recommendations could also help.
 - **Nixie Tubes x6**: I used the IN-12 model. Each tube cost about 60 RMB; they are more expensive in Taiwan, so I bought them from Taobao. Larger tubes are an option if your budget allows.
 - **Nixie Tube Sockets x6**
+- Dupont Wire*60**
+- Dupont wires ×60(you can buy 70~ 80 just in cass)
 - **K155ID1 Nixie Tube Driver x6**
 - **74HC595 Shift Registers x3**
 - **Micro Switches x2** with **Resistors for Switches x2**
