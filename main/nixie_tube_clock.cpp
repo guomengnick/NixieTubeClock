@@ -17,9 +17,9 @@ namespace{
   const unsigned long kRepeatFastStartMs = 3000;
   const unsigned long kRepeatFastIntervalMs = 100;  // 約每秒 10 下
 
-  // 設定模式閃爍: 一個週期 500ms, 亮 300ms 暗 200ms (約每秒閃 2 次)
-  const unsigned long kBlinkPeriodMs = 500;
-  const unsigned long kBlinkOnMs = 300;
+  // 設定模式閃爍: 一個週期 400ms, 亮 240ms 暗 160ms (約每秒閃 2.5 次)
+  const unsigned long kBlinkPeriodMs = 400;
+  const unsigned long kBlinkOnMs = 240;
   const uint8_t kTubeCleanSteps = 25;
   //由管子的後到前顯示數字
   const byte kTubeShowNumbers[10] = {11, 66, 22, 55, 0, 44, 77, 99, 88, 33};
