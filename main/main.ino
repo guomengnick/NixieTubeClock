@@ -14,5 +14,5 @@ void setup(){
 void loop(){
   nixie_tube_clock_.UpdateTimeIfNextSecond();
   nixie_tube_clock_.CheckButtonStatus();
-  delay(10);
+  delay(2);//按鈕與清理動畫都用 millis() 計時, 這裡只需要很短的間隔
 }
