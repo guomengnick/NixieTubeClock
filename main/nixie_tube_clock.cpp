@@ -10,6 +10,16 @@ namespace{
   const unsigned long kEnterSettingHoldMs = 3000;   // 長按 back 3 秒進入設定模式
   const unsigned long kManualCleanHoldMs = 1000;    // 兩顆一起長按 1 秒清理管子
   const unsigned long kSettingTimeoutMs = 8000;     // 設定模式 8 秒沒按鍵就回到正常模式
+
+  // 設定模式按住 front 連續加: 按下先 +1, 按住 1 秒後慢速連加, 按住 3 秒後快速連加, 放開就停
+  const unsigned long kRepeatSlowStartMs = 1000;
+  const unsigned long kRepeatSlowIntervalMs = 300;  // 約每秒 3 下
+  const unsigned long kRepeatFastStartMs = 3000;
+  const unsigned long kRepeatFastIntervalMs = 100;  // 約每秒 10 下
+
+  // 設定模式閃爍: 一個週期 500ms, 亮 300ms 暗 200ms (約每秒閃 2 次)
+  const unsigned long kBlinkPeriodMs = 500;
+  const unsigned long kBlinkOnMs = 300;
   const uint8_t kTubeCleanSteps = 25;
   //由管子的後到前顯示數字
   const byte kTubeShowNumbers[10] = {11, 66, 22, 55, 0, 44, 77, 99, 88, 33};
@@ -188,10 +198,7 @@ void NixieTubeClock::ProcessSettingTime(){
   if(back_set_btn_.WasPressed()){ // 只在「剛按下」的那一刻觸發一次
     SwitchSettingTimeUnit();//是否second minute hour 切換
   }
-  if(front_add_btn_.WasPressed()){
-    last_setting_activity_millsecond_ = millis();//有按按鍵,更新上次按下的時間
-    AdjustTime();
-  }
+  ProcessAddButtonInSetting();
   // 經過８秒沒按任何按鍵, 就變成正常模式
   if(millis() - last_setting_activity_millsecond_ > kSettingTimeoutMs){
     current_mode_ = ClockMode::Normal;
@@ -216,6 +223,32 @@ void NixieTubeClock::CheckIfExecuteSettingTimeMode(){
   }
 }
 
+// 設定模式下的 front 按鍵: 按一下 +1, 按住兩段加速連續 +1, 放開就停
+void NixieTubeClock::ProcessAddButtonInSetting(){
+  if(front_add_btn_.WasPressed()){
+    last_setting_activity_millsecond_ = millis();//有按按鍵,更新上次按下的時間
+    AdjustTime();
+    last_repeat_millsecond_ = millis();
+    return;
+  }
+  // 秒只能歸零, 不需要連加; 兩顆一起按時也不連加
+  if(!front_add_btn_.IsPressed() || back_set_btn_.IsPressed() ||
+     current_mode_ == ClockMode::SettingSecond){
+    return;
+  }
+  last_setting_activity_millsecond_ = millis();//按住期間不會逾時跳回正常模式
+  const unsigned long held_ms = front_add_btn_.PressedDurationMs();
+  if(held_ms < kRepeatSlowStartMs){
+    return;
+  }
+  const unsigned long interval =
+    held_ms >= kRepeatFastStartMs ? kRepeatFastIntervalMs : kRepeatSlowIntervalMs;
+  if(millis() - last_repeat_millsecond_ >= interval){
+    last_repeat_millsecond_ = millis();
+    AdjustTime();
+  }
+}
+
 // 在設定模式下切換設定項目, second->minute->hour->second...
 void NixieTubeClock::SwitchSettingTimeUnit(){
   last_setting_activity_millsecond_ = millis();
@@ -236,33 +269,26 @@ void NixieTubeClock::SwitchSettingTimeUnit(){
   last_blink_millsecond_ = millis();
 }
 
-//閃爍當前設定的時間, 但當切換的瞬間, 需要將上一個快速顯示回去, 不能不顯示
+//閃爍當前設定的時間; 其他沒在設定的管子永遠正常顯示
+//按住 front 加數字時, 正在設定的管子保持常亮, 才看得清楚數字在跑
 void NixieTubeClock::BlinkTube(){ 
-  unsigned long current_time = millis();
-  unsigned long current_off_time_millisecond_ = 
-    (current_time - last_blink_millsecond_);
   Ds1302::DateTime now;
   real_time_clock_.getDateTime(&now);
-  if(current_off_time_millisecond_ % 1000 > 500){
-    if (current_mode_ == SettingSecond){
-      SetTimeUnit(TimeUnit::Second, now.second);
-    } else if (current_mode_ == SettingMinute){
-      SetTimeUnit(TimeUnit::Minut, now.minute);
-    } else if (current_mode_ == SettingHour){
-      SetTimeUnit(TimeUnit::Hour, now.hour);
-    }
-  }
-  else{
+  const bool holding_add = front_add_btn_.IsPressed();
+  const bool show = holding_add ||
+    (millis() - last_blink_millsecond_) % kBlinkPeriodMs < kBlinkOnMs;
+  if(!show){
     if (current_mode_ == SettingSecond){
       now.second = 255;
-      SetTime(now);
     } else if (current_mode_ == SettingMinute){
       now.minute = 255;
-      SetTime(now);
     } else if (current_mode_ == SettingHour){
       now.hour = 255;
-      SetTime(now);
     }
+  }
+  SetTime(now);//ShiftRegister 會略過沒變的值, 每輪呼叫不會多送資料
+  if(holding_add){
+    last_blink_millsecond_ = millis();//放開後從「亮」開始閃
   }
 }
 

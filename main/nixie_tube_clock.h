@@ -33,6 +33,7 @@ class NixieTubeClock{
   unsigned long clean_step_start_millsecond_ = 0;
   //**********************************************************************
   unsigned long last_blink_millsecond_ = 0;
+  unsigned long last_repeat_millsecond_ = 0;  // 按住連加: 上一次 +1 的時間
 
   ClockMode current_mode_;
   
@@ -48,6 +49,7 @@ class NixieTubeClock{
   void ProcessCleanTube();
   void CheckIfExecuteSettingTimeMode();
   void SwitchSettingTimeUnit();
+  void ProcessAddButtonInSetting();
   void BlinkTube();
   void AdjustTime();
   void SetTimeUnit(const TimeUnit unit, const int now);
