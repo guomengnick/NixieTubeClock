@@ -53,11 +53,12 @@ NixieTubeClock::NixieTubeClock()
     back_set_btn_(kBackButtonPin),
     front_add_btn_(kFrontButtonPin),
     current_mode_(ClockMode::Normal){
-
-    SetRealTimeClock();
+  // 這裡不碰硬體: 全域物件的建構子比 Arduino 的 init() 和 setup() 都早跑,
+  // 這時候 Serial 還沒開, 印出來的字會直接不見
 }
 
 void NixieTubeClock::Setup(){
+  SetRealTimeClock();  // 要在 Serial.begin() 之後, "RTC is halted" 才印得出來
   back_set_btn_.Begin();
   front_add_btn_.Begin();
   // 解碼秀的亂數每次開機都不一樣
