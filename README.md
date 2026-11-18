@@ -46,6 +46,7 @@
 |---|---|
 | 長按**後面**按鈕 2 秒<br>Hold **back** button 2 s | 設定時間：後鍵切換 秒→分→時，前鍵 +1（秒是歸零），按住會越加越快；8 秒沒按自動離開<br>Set time: back cycles second → minute → hour, front adds 1 (second resets to 0), hold to repeat faster; exits after 8 s idle |
 | 長按**前面**按鈕 2 秒<br>Hold **front** button 2 s | 設定亮度：前鍵 +5%、後鍵 -5%（20%~100%，預設 80%），存進 EEPROM；5 秒沒按自動離開<br>Set brightness: front +5 %, back −5 % (20–100 %, default 80 %), saved to EEPROM; exits after 5 s idle |
+| 短按**前面**按鈕<br>Tap **front** button | 看日期 YY MM DD，3 秒後淡回時間（再按一下提早回去）<br>Show the date YY MM DD for 3 s (tap again to go back early) |
 | 兩顆一起按 1 秒<br>Hold both 1 s | 手動清管<br>Clean the tubes manually |
 
 ### 顯示效果 | Display
@@ -54,6 +55,8 @@
   **Boot animation**: sweeps 0–9 (a quick self-test), then scrambles and locks onto the current time left to right.
 - **淡入淡出換字**、**冒號呼吸燈**：都是用 Timer2 中斷做的軟體 PWM。  
   **Crossfading digits** and a **breathing colon**, both done with software PWM on a Timer2 interrupt.
+- **滾輪換字**：換分鐘時，時、分有變的管子像吃角子老虎一樣往上滾至少一整圈，最後放慢停在新數字，多支時由左到右一支一支停。  
+  **Slot-machine roll**: on each new minute, the hour/minute tubes that change spin through at least one full cycle, slow down and land on the new digit, left to right.
 - **亮度**：電流不變，只縮短每輪亮的時間（每秒 133 輪），輝光一樣包滿陰極；損耗大致跟亮度成正比。  
   **Brightness**: same current, shorter on-time per cycle (133 Hz), so the glow still covers the whole cathode; wear scales roughly with brightness.
 - **自動清管**：每 15~60 秒把每個數字快速亮過兩輪（約 1.2 秒），防止陰極中毒。  

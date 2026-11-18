@@ -113,11 +113,134 @@ void NixieTubeClock::Setup(){
 }
 
 // 6 支管子各自的數字 (由左到右: 時十 時個 分十 分個 秒十 秒個); 大於 9 (例如 255) = 該支不亮
-void NixieTubeClock::ShowDigits(const uint8_t digits[6]){
+void NixieTubeClock::ShowDigits(const uint8_t digits[6], uint8_t fade_ticks){
   const TimeUnit units[3] = {Hour, Minut, Second};
   for (uint8_t pair = 0; pair < 3; ++pair) {
-    time_registers_[units[pair]].SetDigits(digits[pair * 2], digits[pair * 2 + 1]);
+    time_registers_[units[pair]].SetDigits(digits[pair * 2], digits[pair * 2 + 1], fade_ticks);
   }
+}
+
+// 日期顯示成 YY MM DD (USB 對時、短按 front 共用)
+void NixieTubeClock::ShowDate(const Ds1302::DateTime& date, uint8_t fade_ticks){
+  const uint8_t digits[6] = {
+    (uint8_t)(date.year / 10), (uint8_t)(date.year % 10),
+    (uint8_t)(date.month / 10), (uint8_t)(date.month % 10),
+    (uint8_t)(date.day / 10), (uint8_t)(date.day % 10)};
+  ShowDigits(digits, fade_ticks);
+}
+
+//******************************** 看日期 ********************************
+// 正常模式下短按 front: 淡入日期, kDateShowMs 後淡回時間; 顯示中再短按就提早回去
+void NixieTubeClock::StartDateShow(){
+  if (date_showing_) {
+    date_showing_ = false;
+    ShowCurrentTime();
+    return;
+  }
+  if (cleaning_) {  // 清管到一半就停掉, 下一次重新倒數
+    cleaning_ = false;
+    ScheduleNextClean();
+  }
+  rolling_ = false;
+  date_showing_ = true;
+  date_start_millsecond_ = millis();
+  Ds1302::DateTime now;
+  real_time_clock_.getDateTime(&now);
+  char line[20];
+  snprintf_P(line, sizeof(line), PSTR("[DATE] 20%02u-%02u-%02u"), now.year, now.month, now.day);
+  Serial.println(line);
+  ShowDate(now, kTimeFade);
+}
+
+void NixieTubeClock::UpdateDateShow(){
+  if (!date_showing_) {
+    return;
+  }
+  if (current_mode_ != ClockMode::Normal || cleaning_) {
+    date_showing_ = false;  // 進設定模式或手動清管, 交給它們顯示
+    return;
+  }
+  if (millis() - date_start_millsecond_ >= kDateShowMs) {
+    date_showing_ = false;
+    ShowCurrentTime();
+  }
+}
+
+//******************************** 滾輪換字 ********************************
+// 每分鐘 0 秒呼叫: 時、分 4 支管子裡數字有變的開始滾 (說明見 config.h 的 kRollOnMinute)
+void NixieTubeClock::StartRoll(const Ds1302::DateTime& now){
+  const int hour_data = time_registers_[Hour].LastData();
+  const int minute_data = time_registers_[Minut].LastData();
+  if (hour_data < 0 || minute_data < 0) {
+    return;  // 還沒顯示過, 沒有「舊數字」可以從那裡滾
+  }
+  // 595 資料: 高 4 位 = 個位數, 低 4 位 = 十位數; 大於 9 = 原本不亮
+  const uint8_t shown[4] = {
+    (uint8_t)(hour_data & 0x0F), (uint8_t)(hour_data >> 4),
+    (uint8_t)(minute_data & 0x0F), (uint8_t)(minute_data >> 4)};
+  const uint8_t target[4] = {
+    (uint8_t)(now.hour / 10), (uint8_t)(now.hour % 10),
+    (uint8_t)(now.minute / 10), (uint8_t)(now.minute % 10)};
+
+  uint8_t min_steps = kRollMinSteps;
+  rolling_ = false;
+  for (uint8_t i = 0; i < 4; ++i) {
+    roll_digit_[i] = target[i];
+    roll_steps_left_[i] = 0;
+    if (shown[i] == target[i]) {
+      continue;  // 沒變的管子不動
+    }
+    const uint8_t from = shown[i] <= 9 ? shown[i] : target[i];
+    // 從舊數字一格一格往上 (9 -> 0 繞回來), 至少 min_steps 格, 剛好停在新數字
+    uint8_t steps = min_steps;
+    while ((from + steps) % 10 != target[i]) {
+      ++steps;
+    }
+    roll_digit_[i] = from;
+    roll_steps_left_[i] = steps;
+    roll_next_millsecond_[i] = millis();  // 第一格馬上動
+    min_steps = steps + kRollStaggerSteps;  // 右邊那支比這支晚停
+    rolling_ = true;
+  }
+}
+
+void NixieTubeClock::UpdateRoll(){
+  if (!rolling_) {
+    return;
+  }
+  if (current_mode_ != ClockMode::Normal || cleaning_ || date_showing_) {
+    rolling_ = false;  // 被別的畫面接手, 它們會自己顯示
+    return;
+  }
+  const unsigned long now = millis();
+  bool changed = false;
+  bool still_rolling = false;
+  for (uint8_t i = 0; i < 4; ++i) {
+    if (roll_steps_left_[i] == 0) {
+      continue;
+    }
+    if ((long)(now - roll_next_millsecond_[i]) >= 0) {
+      roll_digit_[i] = (roll_digit_[i] + 1) % 10;
+      const uint8_t left = --roll_steps_left_[i];
+      // 最後 kRollSlowSteps 格越來越慢, 像滾輪停下來
+      unsigned long wait = kRollStepMs;
+      if (left > 0 && left <= kRollSlowSteps) {
+        wait += (kRollSlowSteps + 1 - left) * kRollSlowDownMs;
+      }
+      roll_next_millsecond_[i] = now + wait;
+      changed = true;
+    }
+    still_rolling = still_rolling || roll_steps_left_[i] > 0;
+  }
+  if (changed) {
+    ShowRollDigits();
+  }
+  rolling_ = still_rolling;  // 全部停好時顯示的就是新時間, 不用再補
+}
+
+void NixieTubeClock::ShowRollDigits(){
+  time_registers_[Hour].SetDigits(roll_digit_[0], roll_digit_[1], kRollFade);
+  time_registers_[Minut].SetDigits(roll_digit_[2], roll_digit_[3], kRollFade);
 }
 
 // 解碼秀 (說明見最上面的 kBootAnimation); 約 1.5 秒, 期間不讀按鈕
@@ -217,11 +340,9 @@ void NixieTubeClock::HandleSerial(){
   current_mode_ = ClockMode::Normal;
   time_adjusted_in_setting_ = false;  // 已經用 USB 對準了, 不用再當手動設定
   cleaning_ = false;
-  const uint8_t date[6] = {
-    (uint8_t)(received.year / 10), (uint8_t)(received.year % 10),
-    (uint8_t)(received.month / 10), (uint8_t)(received.month % 10),
-    (uint8_t)(received.day / 10), (uint8_t)(received.day % 10)};
-  ShowDigits(date);
+  date_showing_ = false;
+  rolling_ = false;
+  ShowDate(received, TubeDriver::kFadeInstant);
   delay(kSyncDateShowMs);
   RunDecodeShow(nullptr, 0);
   ScheduleNextClean();
@@ -284,6 +405,11 @@ void NixieTubeClock::CheckButtonStatus(){
   back_set_btn_.Update();
   front_add_btn_.Update();
 
+  // 短按 front (沒有拿去做別的事就放開) = 看日期; 要在下面清掉 used 旗標之前判斷
+  // 長按 2 秒進亮度、設定時間時按的、兩顆一起按的, 都會設 front_btn_used_in_combo_, 放開不會跳日期
+  const bool front_tapped = front_add_btn_.WasReleased() && !front_btn_used_in_combo_ &&
+                            current_mode_ == ClockMode::Normal;
+
   // back 放開前只要 front 也按過，就當作是「兩顆一起按」，不會誤進設定模式
   if (!back_set_btn_.IsPressed()) {
     back_btn_used_in_combo_ = false;
@@ -298,6 +424,11 @@ void NixieTubeClock::CheckButtonStatus(){
 
   ProcessCleanTube();
   ProcessSettingTime();
+  if (front_tapped) {
+    StartDateShow();
+  }
+  UpdateDateShow();
+  UpdateRoll();
 }
 
 void NixieTubeClock::ProcessCleanTube(){
@@ -343,17 +474,26 @@ void NixieTubeClock::UpdateTimeIfNextSecond(){
     tag = "  [set hour]";
   } else if (current_mode_ == SettingBrightness) {
     tag = "  [set brightness]";
+  } else if (date_showing_) {
+    tag = "  [date]";
   }
   char line[28];
   snprintf(line, sizeof(line), "%02u:%02u:%02u%s", now.hour, now.minute, now.second, tag);
   Serial.println(line);
 
-  if(current_mode_ != ClockMode::Normal || cleaning_){
-    return;//設定模式或清理管子中, 不覆蓋顯示
+  if(current_mode_ != ClockMode::Normal || cleaning_ || date_showing_){
+    return;//設定模式、清理管子、看日期中, 不覆蓋顯示
   }
   if (kChime && now.second == 0 && now.minute % kChimeEveryMinutes == 0) {
     Serial.println("[CHIME]");
     RunDecodeShow(kChimeSweepDigits, kChimeSweepStepMs);  // 最後會自己顯示現在時間
+    return;
+  }
+  if (kRollOnMinute && now.second == 0 && !rolling_) {
+    StartRoll(now);  // 換分鐘: 時、分交給滾輪, 由 UpdateRoll() 一格一格推
+  }
+  if (rolling_) {
+    time_registers_[Second].SetClockTime(now.second, kTimeFade);  // 滾動中只更新秒
     return;
   }
   SetTime(now, kTimeFade);
@@ -398,8 +538,8 @@ void NixieTubeClock::ScheduleNextClean(){
 }
 
 void NixieTubeClock::AutoCleanTube(){
-  if(current_mode_ != ClockMode::Normal || cleaning_){
-    return;//只在正常模式下清理管子
+  if(current_mode_ != ClockMode::Normal || cleaning_ || date_showing_ || rolling_){
+    return;//只在正常模式下清理管子; 看日期、滾輪換字時等它結束
   }
   if((millis() - last_clean_tube_time_millsecond_) / 1000 >= next_clean_after_seconds_){
     StartCleanTube();

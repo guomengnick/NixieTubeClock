@@ -34,14 +34,29 @@ class NixieTubeClock{
   unsigned long last_repeat_millsecond_ = 0;  // 按住連加: 上一次 +1 的時間
   unsigned long repeat_interval_ms_ = 0;      // 按住連加: 距離下一次 +1 的間隔, 越按越短
   unsigned long breath_start_millsecond_ = 0;  // 冒號呼吸燈: 這次呼吸開始的時間
-  int last_logged_show_value_ = -1;
+  int last_logged_show_value_ = -1;  // 診斷日誌: 設定中的管子上次印出的數字, 變了才再印
   bool time_adjusted_in_setting_ = false;  // 這次設定模式有改到時間, 離開時通知誤差補償
-  bool rtc_was_reset_ = false;             // 開機時 RTC 停著 (電池沒電), 被設回預設時間  // 診斷日誌: 設定中的管子上次印出的數字, 變了才再印
+  bool rtc_was_reset_ = false;             // 開機時 RTC 停著 (電池沒電), 被設回預設時間
+  //*************************************看日期***************************
+  bool date_showing_ = false;              // 短按 front 正在顯示日期
+  unsigned long date_start_millsecond_ = 0;
+  //*************************************滾輪換字*************************
+  // 時十 時個 分十 分個 4 支管子各自滾動; steps_left = 0 表示已經停在新數字
+  bool rolling_ = false;
+  uint8_t roll_digit_[4];
+  uint8_t roll_steps_left_[4];
+  unsigned long roll_next_millsecond_[4];
 
   ClockMode current_mode_;
   
   void RunDecodeShow(const uint8_t sweep_digits[10], unsigned long sweep_step_ms);
-  void ShowDigits(const uint8_t digits[6]);
+  void ShowDigits(const uint8_t digits[6], uint8_t fade_ticks = TubeDriver::kFadeInstant);
+  void ShowDate(const Ds1302::DateTime& date, uint8_t fade_ticks);
+  void StartDateShow();
+  void UpdateDateShow();
+  void StartRoll(const Ds1302::DateTime& now);
+  void UpdateRoll();
+  void ShowRollDigits();
   void ScheduleNextClean();
   void AutoCleanTube();
   void StartCleanTube();

@@ -10,7 +10,7 @@
 
 //******************************** 腳位 ********************************
 const int kBackButtonPin = A1;     // 後面按鈕: 長按設定時間 / 設定模式下切換時分秒 (不能只寫 1)
-const int kFrontButtonPin = A2;    // 前面按鈕: 長按設定亮度 / 設定模式下 +1
+const int kFrontButtonPin = A2;    // 前面按鈕: 短按看日期 / 長按設定亮度 / 設定模式下 +1
 const int kColonLedPin = 12;       // 冒號 LED, 與「時」那顆 74HC595 的 STCP (大平台) 共用
 const int kRandomSeedPin = A7;     // Nano 的 A7 沒接東西, 讀到的雜訊拿來當亂數種子
 
@@ -88,6 +88,22 @@ const bool kColonBreathing = true;
 const bool kDigitFade = true;
 const uint8_t kTimeFade = kDigitFade ? TubeDriver::kFadeNormal : TubeDriver::kFadeInstant;
 const uint8_t kCleanFade = kDigitFade ? TubeDriver::kFadeQuick : TubeDriver::kFadeInstant;
+
+// 看日期: 正常模式下短按 front (按不到 2 秒就放開), 管子淡入日期 YY MM DD, 這麼久後淡回時間;
+// 顯示日期時再短按一下可以提早回去
+const unsigned long kDateShowMs = 3000;
+
+// 滾輪換字 (吃角子老虎): 每分鐘 0 秒換分鐘時, 數字有變的管子 (時、分) 快速往上滾,
+// 至少滾一整圈 (0~9 每個都亮過, 順便清管), 最後幾格慢下來「喀」一聲停在新數字;
+// 有好幾支一起變時由左到右一支一支停。秒的管子照常淡入淡出。false = 跟秒一樣淡入
+//   一般換分鐘 (1 支) 約 0.5~0.9 秒; 整點像 12:59 -> 13:00 (3 支) 約 1 秒; 最久 23:59 -> 00:00 約 1.8 秒
+const bool kRollOnMinute = true;
+const unsigned long kRollStepMs = 40;     // 滾動時每格停留時間
+const uint8_t kRollMinSteps = 10;         // 第一支至少滾幾格 (10 = 一整圈)
+const uint8_t kRollStaggerSteps = 3;      // 下一支至少比上一支多滾幾格 -> 一支一支停
+const uint8_t kRollSlowSteps = 3;         // 最後幾格放慢
+const unsigned long kRollSlowDownMs = 25; // 放慢時每格多停多久 (40 -> 65 -> 90 -> 115ms)
+const uint8_t kRollFade = kDigitFade ? 4 : TubeDriver::kFadeInstant;  // 約 0.03 秒, 一格一格看得清楚
 
 //******************************** 時間 ********************************
 const uint8_t kRtcWriteTries = 3;            // 寫 RTC 後讀回不一致就重寫, 最多寫這麼多次
