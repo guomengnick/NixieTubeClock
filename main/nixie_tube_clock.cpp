@@ -25,7 +25,13 @@ namespace{
   // 設定模式閃爍: 一個週期 400ms, 亮 240ms 暗 160ms (約每秒閃 2.5 次)
   const unsigned long kBlinkPeriodMs = 400;
   const unsigned long kBlinkOnMs = 240;
-  const uint8_t kTubeCleanSteps = 25;
+  // 自動清管 (防陰極中毒): 每隔 15~60 秒 (隨機) 把每個數字快速亮過兩輪
+  // 每步 70ms 起、每步快 1ms -> 一次約 1.2 秒 (原本 25 步約 2.2 秒, 而且前 5 個數字多亮一輪)
+  const unsigned long kAutoCleanMinSeconds = 15;
+  const unsigned long kAutoCleanMaxSeconds = 60;
+  const uint8_t kTubeCleanSteps = 20;            // 10 個數字 x 2 輪, 每個數字亮的時間一樣
+  const float kCleanFirstStepMs = 70;
+  const float kCleanStepSpeedUpMs = 1.0;
   //由管子的後到前顯示數字
   const byte kTubeShowNumbers[10] = {11, 66, 22, 55, 0, 44, 77, 99, 88, 33};
 
@@ -40,7 +46,7 @@ namespace{
 
   // 整點報時: 每隔這麼多分鐘 (在 0 秒那一刻) 跑一次解碼秀, 60 = 只在整點
   // 取代原本每 15~30 秒的自動清管: 白天不會一直被打斷, 每個數字還是定期亮到
-  const bool kChime = true;
+  const bool kChime = false;  // 已經有每 15~60 秒的自動清管, 預設關閉; 想要整點報時改 true
   const uint8_t kChimeEveryMinutes = 60;
   const unsigned long kChimeSweepStepMs = 80;    // 整點掃描用管子由後到前的順序, 像一層層往前推
   const uint8_t kChimeSweepDigits[10] = {1, 6, 2, 5, 0, 4, 7, 9, 8, 3};
@@ -125,6 +131,7 @@ void NixieTubeClock::Setup(){
     Serial.println("[BOOT]");
     RunDecodeShow(kBootSweepDigits, kBootSweepStepMs);
   }
+  ScheduleNextClean();
 }
 
 // 6 支管子各自的數字 (由左到右: 時十 時個 分十 分個 秒十 秒個); 255 = 該支不亮
@@ -194,7 +201,8 @@ void NixieTubeClock::CheckButtonStatus(){
 }
 
 void NixieTubeClock::ProcessCleanTube(){
-  CheckIfExecuteCleanTubeMode();//手動清輝光管 (自動清管改成整點解碼秀, 見 kChime)
+  CheckIfExecuteCleanTubeMode();//手動清輝光管
+  AutoCleanTube();//每 15~60 秒自動清管
   UpdateCleanTube();//非阻塞地推進清理動畫
 }
 
@@ -275,10 +283,27 @@ void NixieTubeClock::CheckIfExecuteCleanTubeMode(){
 }
 
 // 清理管子改成狀態機: 原本 CleanTube() 用 delay() 卡住約 2.2 秒, 期間按鈕完全讀不到
+void NixieTubeClock::ScheduleNextClean(){
+  last_clean_tube_time_millsecond_ = millis();
+  next_clean_after_seconds_ = random(kAutoCleanMinSeconds, kAutoCleanMaxSeconds + 1);
+  Serial.print("[CLEAN] next in ");
+  Serial.print(next_clean_after_seconds_);
+  Serial.println(" s");
+}
+
+void NixieTubeClock::AutoCleanTube(){
+  if(current_mode_ != ClockMode::Normal || cleaning_){
+    return;//只在正常模式下清理管子
+  }
+  if((millis() - last_clean_tube_time_millsecond_) / 1000 >= next_clean_after_seconds_){
+    StartCleanTube();
+  }
+}
+
 void NixieTubeClock::StartCleanTube(){
   cleaning_ = true;
   clean_step_ = 0;
-  clean_step_delay_millsecond_ = 100;
+  clean_step_delay_millsecond_ = kCleanFirstStepMs;
   ShowCleanStep();
   clean_step_start_millsecond_ = millis();
 }
@@ -293,9 +318,10 @@ void NixieTubeClock::UpdateCleanTube(){
     return;
   }
   clean_step_++;
-  clean_step_delay_millsecond_ -= 0.9;
+  clean_step_delay_millsecond_ -= kCleanStepSpeedUpMs;
   if(interrupted || clean_step_ >= kTubeCleanSteps){
     cleaning_ = false;
+    ScheduleNextClean();  // 手動或自動清完都從現在重新倒數
     if(!interrupted){
       ShowCurrentTime();//清理完管子後, 馬上顯示當前時間
     }

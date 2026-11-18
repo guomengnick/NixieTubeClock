@@ -23,7 +23,7 @@ bool Running();
 // 淡入速度: 新數字每幾次中斷 (1/2000 秒) 多佔一格, 16 格換完; 0 = 立刻切換
 const uint8_t kFadeInstant = 0;
 const uint8_t kFadeNormal = 31;  // 約 0.25 秒, 正常走時用
-const uint8_t kFadeQuick = 10;   // 約 0.08 秒, 清管動畫用 (每步約 0.1 秒, 剛好一步接一步流過去)
+const uint8_t kFadeQuick = 7;    // 約 0.06 秒, 清管動畫用 (每步約 50~70ms, 剛好一步接一步流過去)
 
 // 要顯示的資料 (Q7..Q0), 從目前的數字以 ticks_per_level 的速度淡入過去
 void Show(uint8_t id, uint8_t data, uint8_t ticks_per_level);

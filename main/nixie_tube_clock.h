@@ -26,6 +26,8 @@ class NixieTubeClock{
   unsigned long last_setting_activity_millsecond_ = 0;  // 設定模式下最後一次按鍵時間
   //*************************************清理管子*************************
   bool cleaning_ = false;
+  unsigned long last_clean_tube_time_millsecond_ = 0;  // 上一次清管結束的時間
+  unsigned long next_clean_after_seconds_ = 0;         // 距離上一次清管多久後再清
   uint8_t clean_step_ = 0;
   float clean_step_delay_millsecond_ = 0;
   unsigned long clean_step_start_millsecond_ = 0;
@@ -40,6 +42,8 @@ class NixieTubeClock{
   
   void RunDecodeShow(const uint8_t sweep_digits[10], unsigned long sweep_step_ms);
   void ShowDigits(const uint8_t digits[6]);
+  void ScheduleNextClean();
+  void AutoCleanTube();
   void StartCleanTube();
   void UpdateCleanTube();
   void ShowCleanStep();
