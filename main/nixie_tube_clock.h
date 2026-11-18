@@ -34,10 +34,15 @@ class NixieTubeClock{
   //**********************************************************************
   unsigned long last_blink_millsecond_ = 0;
   unsigned long last_repeat_millsecond_ = 0;  // 按住連加: 上一次 +1 的時間
+  unsigned long repeat_interval_ms_ = 0;      // 按住連加: 距離下一次 +1 的間隔, 越按越短
+  unsigned long breath_start_millsecond_ = 0;  // 冒號呼吸燈: 這次呼吸開始的時間
+  int last_logged_show_value_ = -1;  // 診斷日誌: 設定中的管子上次印出的數字, 變了才再印
 
   ClockMode current_mode_;
   
   void RandomizeNextCleaningTime();
+  void RunBootAnimation();
+  void ShowDigits(const uint8_t digits[6]);
   void AutoCleanTube();
   void StartCleanTube();
   void UpdateCleanTube();

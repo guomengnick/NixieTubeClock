@@ -26,15 +26,21 @@ class ShiftRegister {
     }
     SendBinaryData(binary_time);
   }
+  // 最後一次送進 74HC595 的 byte (Q7..Q0), 給診斷日誌用; 還沒送過是 -1
+  int LastData() const { return last_time_; }
  private:
   void SendBinaryData(int data) {
     if(last_time_ == data){
       return;
     }
     last_time_ = data;
+    // 「時」的 latch (pin 12) 也是冒號 LED, 呼吸燈的中斷會一直拉高拉低它;
+    // 送資料這約 0.1ms 先暫停中斷, 免得中途被拉高、把送到一半的資料鎖存到管子上
+    noInterrupts();
     digitalWrite(latch_pin_, LOW); // 开始数据传输
     shiftOut(data_pin_, clock_pin_, MSBFIRST, data); // 发送数据
     digitalWrite(latch_pin_, HIGH); // 完成数据传输
+    interrupts();
   }
   byte numbers_[11];
 
