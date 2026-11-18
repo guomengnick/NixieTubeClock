@@ -5,7 +5,6 @@
 
 #include "button.h"
 #include "shift_register.h"
-#include "tube_cleaner.h"
 
 
 enum ClockMode { Normal, SettingSecond, SettingMinute, SettingHour, SettingBrightness };
@@ -14,9 +13,6 @@ enum TimeUnit {Second, Minut, Hour};
 class NixieTubeClock{
   Ds1302 real_time_clock_;
   ShiftRegister time_registers_[3];
-  friend class TubeCleaner;
-
-  TubeCleaner cleaner_;
 
   //*************************************按鈕*****************************
   Button back_set_btn_;   // A1: 長按3秒進入設定模式 / 設定模式下切換時分秒

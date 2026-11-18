@@ -38,13 +38,65 @@
 
 ---
 
+## 功能與操作 | Features and Controls
+
+### 按鈕 | Buttons
+
+| 操作 Action | 功能 Function |
+|---|---|
+| 長按**後面**按鈕 2 秒<br>Hold **back** button 2 s | 設定時間：後鍵切換 秒→分→時，前鍵 +1（秒是歸零），按住會越加越快；8 秒沒按自動離開<br>Set time: back cycles second → minute → hour, front adds 1 (second resets to 0), hold to repeat faster; exits after 8 s idle |
+| 長按**前面**按鈕 2 秒<br>Hold **front** button 2 s | 設定亮度：前鍵 +5%、後鍵 -5%（20%~100%，預設 80%），存進 EEPROM；5 秒沒按自動離開<br>Set brightness: front +5 %, back −5 % (20–100 %, default 80 %), saved to EEPROM; exits after 5 s idle |
+| 兩顆一起按 1 秒<br>Hold both 1 s | 手動清管<br>Clean the tubes manually |
+
+### 顯示效果 | Display
+
+- **開機解碼秀**：0~9 掃一次（順便檢查每個數字有沒有亮），亂數狂跳後由左到右鎖定成現在時間。  
+  **Boot animation**: sweeps 0–9 (a quick self-test), then scrambles and locks onto the current time left to right.
+- **淡入淡出換字**、**冒號呼吸燈**：都是用 Timer2 中斷做的軟體 PWM。  
+  **Crossfading digits** and a **breathing colon**, both done with software PWM on a Timer2 interrupt.
+- **亮度**：電流不變，只縮短每輪亮的時間（每秒 133 輪），輝光一樣包滿陰極；損耗大致跟亮度成正比。  
+  **Brightness**: same current, shorter on-time per cycle (133 Hz), so the glow still covers the whole cathode; wear scales roughly with brightness.
+- **自動清管**：每 15~60 秒把每個數字快速亮過兩輪（約 1.2 秒），防止陰極中毒。  
+  **Anti-poisoning**: every 15–60 s each digit is cycled twice (≈1.2 s).
+
+### USB 對時與誤差補償 | USB Time Sync and Drift Compensation
+
+1. 時鐘用 USB 接上電腦，雙擊 `tools/sync_time.bat`（會自動找 CH340 的 COM 埠；Arduino IDE 的序列埠監控視窗要先關掉）。  
+   Connect the clock over USB and double-click `tools/sync_time.bat` (it finds the CH340 port automatically; close the Arduino IDE serial monitor first).
+2. 腳本在整秒那一刻送出電腦時間，時鐘先顯示日期再解碼成新時間，腳本會印出對時前快/慢了幾秒。  
+   The script sends the PC time on the exact second; the clock shows the date, then decodes to the new time, and the script prints how far off it was.
+3. **兩次對時隔 3 天以上**，時鐘就會算出 DS1302 每天快/慢多少，之後自己定期撥秒修正（關機期間的誤差開機時補回），資料存在 EEPROM。之後偶爾對時會繼續修正速率。  
+   **Two syncs at least 3 days apart** let the clock learn how many seconds per day its DS1302 drifts; it then corrects itself (including time spent powered off) and stores the rate in EEPROM. Later syncs keep refining the rate.
+
+也可以在序列埠監控視窗（9600 baud，行尾選「換行」）手動輸入：`?` 查詢時間、`T2026-11-18 10:00:00` 設定時間。  
+You can also type in the serial monitor (9600 baud, newline): `?` to query, `T2026-11-18 10:00:00` to set.
+
+### 程式結構 | Code Layout
+
+| 檔案 File | 內容 Contents |
+|---|---|
+| `main/config.h` | 所有可調的設定與腳位 / every tunable setting and pin |
+| `main/nixie_tube_clock.*` | 主邏輯：模式、按鈕、清管、動畫 / main logic: modes, buttons, cleaning, animations |
+| `main/tube_driver.*` | 中斷送 595：淡入淡出、亮度 / interrupt-driven 595 output: fades, brightness |
+| `main/colon_led.*`, `main/fast_tick.*` | 冒號呼吸燈、Timer2 16 kHz 中斷 / breathing colon, Timer2 16 kHz interrupt |
+| `main/time_sync.*`, `main/drift_comp.*` | USB 對時指令、DS1302 誤差補償 / USB sync commands, DS1302 drift compensation |
+| `main/button.h`, `main/shift_register.h` | 按鈕防抖、595 資料格式 / button debounce, 595 data format |
+| `tools/sync_time.*` | 電腦端對時腳本 / PC-side sync script |
+
+---
+
 ## 開發與上傳流程 | Development and Upload Process
 
 1. **下載本專案**：克隆或下載 ZIP 文件。  
    **Download the project**: Clone or download the ZIP file.
    ```bash
    git clone https://github.com/guomengnick/NixieTubeClock.git
-   
+   ```
+2. **安裝 DS1302 程式庫**：把 `libraries/Ds1302` 複製到 Arduino 的 libraries 資料夾。  
+   **Install the DS1302 library**: copy `libraries/Ds1302` into your Arduino libraries folder.
+3. **上傳**：用 Arduino IDE 開啟 `main/main.ino`，板子選 Arduino Nano 後上傳。  
+   **Upload**: open `main/main.ino` in the Arduino IDE, select Arduino Nano, and upload.
+
 
 ## 開發注意 | Note on Development
 1. 可能是因為我買的nano板比較舊, 我編譯沒問題,但上傳都會遇到上傳失敗, 後來發現需要選用以下模式才可以, 如果有遇到該問題的可以參考

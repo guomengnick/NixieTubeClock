@@ -4,87 +4,13 @@
 #include "nixie_tube_clock.h"
 
 #include "colon_led.h"
+#include "config.h"
 #include "drift_comp.h"
 #include "fast_tick.h"
 #include "time_sync.h"
 #include "tube_driver.h"
 
 namespace{
-  const int button_input_mode_back_pin_ = A1;//不能只寫'1'
-  const int button_input_add_front_pin_ = A2;
-  const int led_output_pin_ = 12;/*與74HC595 小時的'大平台'共用*/
-
-  const unsigned long kEnterSettingHoldMs = 2000;   // 長按 back 2 秒進入設定模式
-  const unsigned long kManualCleanHoldMs = 1000;    // 兩顆一起長按 1 秒清理管子
-  const unsigned long kSettingTimeoutMs = 8000;     // 設定模式 8 秒沒按鍵就回到正常模式
-
-  // 亮度設定: 正常模式下長按 front 2 秒進入, 管子顯示目前亮度 (例如 "80");
-  // front 亮一階 (5%)、back 暗一階, 5 秒沒按就回到時間。每次調整馬上存進 EEPROM
-  // 亮度是用「縮短亮的時間」做的 (見 tube_driver.h), 損耗大致跟亮度成正比: 80% 約少 20% 損耗
-  const unsigned long kEnterBrightnessHoldMs = 2000;
-  const unsigned long kBrightnessTimeoutMs = 5000;
-  const uint8_t kBrightnessDefault = 80;  // 第一次開機的亮度: 肉眼幾乎看不出比 100% 暗
-  const uint8_t kBrightnessMin = 20;      // 每輪亮 1.5ms; 再暗白天會看不清楚
-  const uint8_t kBrightnessMax = 100;
-  const uint8_t kBrightnessStep = 5;       // = TubeDriver 一格, 剛好不用四捨五入
-  const int kBrightnessEepromAddress = 64;  // 0 開始的那段給 drift_comp 用
-
-  // 設定模式按住 front 連續加 (跟鍵盤按住連打一樣): 按下先 +1, 按住 0.5 秒開始連加,
-  // 一開始每 200ms 加 1, 之後每加一次間隔縮短 15%, 按住約 1.3 秒後到最快每 50ms 加 1 (每秒 20 下), 放開就停
-  const unsigned long kRepeatDelayMs = 500;
-  const unsigned long kRepeatStartIntervalMs = 200;
-  const unsigned long kRepeatMinIntervalMs = 50;
-  const uint8_t kRepeatSpeedUpPercent = 85;  // 下一次間隔 = 這一次 x 85%
-
-  // 設定模式閃爍: 一個週期 400ms, 亮 240ms 暗 160ms (約每秒閃 2.5 次)
-  const unsigned long kBlinkPeriodMs = 400;
-  const unsigned long kBlinkOnMs = 240;
-  // 自動清管 (防陰極中毒): 每隔 15~60 秒 (隨機) 把每個數字快速亮過兩輪
-  // 每步 70ms 起、每步快 1ms -> 一次約 1.2 秒 (原本 25 步約 2.2 秒, 而且前 5 個數字多亮一輪)
-  const unsigned long kAutoCleanMinSeconds = 15;
-  const unsigned long kAutoCleanMaxSeconds = 60;
-  const uint8_t kTubeCleanSteps = 20;            // 10 個數字 x 2 輪, 每個數字亮的時間一樣
-  const float kCleanFirstStepMs = 70;
-  const float kCleanStepSpeedUpMs = 1.0;
-  //由管子的後到前顯示數字
-  const byte kTubeShowNumbers[10] = {11, 66, 22, 55, 0, 44, 77, 99, 88, 33};
-
-  // 解碼秀 (開機一次、之後每到整點一次), 兼開機自我檢查與清管:
-  //  1. 掃描: 6 支管子一起把 0~9 每個數字亮一次 (保證每個陰極都亮到 = 清管; 開機時也方便看哪個數字不亮)
-  //  2. 解碼: 亂數狂跳, 再從左到右一支一支鎖定成現在時間
-  //  3. 閃斷: 整排熄滅/亮起兩下, 像舊螢幕開機
-  // 要慢慢檢查每個數字, 把 kBootSweepStepMs 改成 1500 即可
-  const bool kBootAnimation = true;
-  const unsigned long kBootSweepStepMs = 105;    // 開機掃描: 每個數字停留時間 (0 -> 9 順序, 方便除錯)
-  const uint8_t kBootSweepDigits[10] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
-
-  // 整點報時: 每隔這麼多分鐘 (在 0 秒那一刻) 跑一次解碼秀, 60 = 只在整點
-  // 取代原本每 15~30 秒的自動清管: 白天不會一直被打斷, 每個數字還是定期亮到
-  const bool kChime = false;  // 已經有每 15~60 秒的自動清管, 預設關閉; 想要整點報時改 true
-  const uint8_t kChimeEveryMinutes = 60;
-  const unsigned long kChimeSweepStepMs = 80;    // 整點掃描用管子由後到前的順序, 像一層層往前推
-  const uint8_t kChimeSweepDigits[10] = {1, 6, 2, 5, 0, 4, 7, 9, 8, 3};
-  const unsigned long kBootScrambleMs = 35;     // 解碼: 亂數每幾 ms 換一次
-  const uint8_t kBootFramesPerLock = 4;         // 解碼: 亂跳幾次後鎖定下一支管子
-  const unsigned long kBootGlitchMs = 50;       // 閃斷: 每次熄滅/亮起的時間
-  const int kRandomSeedPin = A7;                // Nano 的 A7 沒接東西, 讀到的雜訊拿來當亂數種子
-
-  // 冒號 LED 呼吸燈 (軟體 PWM, 見 colon_led.h); false = 回到原本亮 1 秒暗 1 秒
-  const bool kColonBreathing = true;
-  // 換數字時淡入淡出 (見 tube_driver.h, 速度調 kFadeNormal / kFadeQuick); false = 原本的立刻切換
-  const bool kDigitFade = true;
-  const uint8_t kTimeFade = kDigitFade ? TubeDriver::kFadeNormal : TubeDriver::kFadeInstant;
-  const uint8_t kCleanFade = kDigitFade ? TubeDriver::kFadeQuick : TubeDriver::kFadeInstant;
-
-  // 詳細診斷日誌 ([ADD]/[SHOW] 印出 RTC 讀回值與送進 595 的位元)。
-  // 9600 baud 一秒只能送約 960 個字, 打開時按住快速連加會被序列埠拖慢, 平常保持 false
-  const bool kVerboseLog = false;
-  const uint8_t kRtcWriteTries = 3;  // 寫 RTC 後讀回不一致就重寫, 最多寫這麼多次
-  const unsigned long kSyncDateShowMs = 1200;
-  // 誤差補償 (見 drift_comp.h): 每分鐘的這一秒檢查要不要撥 1 秒; 避開 59->00, 不會牽動分鐘
-  const bool kDriftCompensation = true;
-  const uint8_t kDriftFixSecond = 30;  // USB 對時成功: 先顯示日期 (YY MM DD) 這麼久, 再解碼成時間
-
   const char* const kUnitNames[3] = {"second", "minute", "hour"};
 
   TimeUnit UnitOfMode(ClockMode mode){
@@ -95,30 +21,37 @@ namespace{
     return unit == Hour ? t.hour : (unit == Minut ? t.minute : t.second);
   }
 
-  // 把送進 74HC595 的 byte 印成 "Q7..Q0=0001 0001 (ones=1 tens=1)"
+  // 把送進 74HC595 的 byte 印成 "595 Q7..Q0=0001 0001 (ones=1 tens=1)" 並換行
   // 高 4 位 (Q7..Q4) 接個位數 K155ID1 的 D C B A, 低 4 位 (Q3..Q0) 接十位數; 15 = 不亮
-  String Describe595(int data){
+  // (直接 print, 不用 String 串接: Nano 只有 2KB RAM, String 反覆配置會讓記憶體碎掉)
+  void Print595Line(int data){
     if (data < 0) {
-      return "595 not sent yet";
+      Serial.println(F("595 not sent yet"));
+      return;
     }
-    String s = "595 Q7..Q0=";
+    Serial.print(F("595 Q7..Q0="));
     for (int8_t b = 7; b >= 0; --b) {
-      s += ((data >> b) & 1) ? '1' : '0';
+      Serial.print(((data >> b) & 1) ? '1' : '0');
       if (b == 4) {
-        s += ' ';
+        Serial.print(' ');
       }
     }
-    return s + " (ones=" + String((data >> 4) & 0x0F) + " tens=" + String(data & 0x0F) + ")";
+    Serial.print(F(" (ones="));
+    Serial.print((data >> 4) & 0x0F);
+    Serial.print(F(" tens="));
+    Serial.print(data & 0x0F);
+    Serial.println(')');
   }
 }
 
 
 NixieTubeClock::NixieTubeClock()
-  : real_time_clock_(Ds1302(4/*enable_pin*/, 2/*clock_pin*/, 3/*data_pin*/)), 
-    time_registers_{ ShiftRegister(Second, 6, 7, 5)/*秒*/,
-      ShiftRegister(Minut, 9, 10, 8)/*分*/, ShiftRegister(Hour, 12, 13, 11)/*時*/ },
-    back_set_btn_(button_input_mode_back_pin_),
-    front_add_btn_(button_input_add_front_pin_),
+  : real_time_clock_(Ds1302(kRtcEnablePin, kRtcClockPin, kRtcDataPin)),
+    time_registers_{ ShiftRegister(Second, kSecondLatchPin, kSecondClockPin, kSecondDataPin),
+      ShiftRegister(Minut, kMinuteLatchPin, kMinuteClockPin, kMinuteDataPin),
+      ShiftRegister(Hour, kHourLatchPin, kHourClockPin, kHourDataPin) },
+    back_set_btn_(kBackButtonPin),
+    front_add_btn_(kFrontButtonPin),
     current_mode_(ClockMode::Normal){
 
     SetRealTimeClock();
@@ -141,7 +74,7 @@ void NixieTubeClock::Setup(){
   }
   TubeDriver::Begin(latch_pins, clock_pins, data_pins);
   if (kColonBreathing) {
-    ColonLed::Begin(led_output_pin_);
+    ColonLed::Begin(kColonLedPin);
   }
   FastTick::Begin();
 
@@ -390,7 +323,7 @@ void NixieTubeClock::UpdateTimeIfNextSecond(){
   }
   if (!kColonBreathing) {
     static bool current_led_turn_on_ = false;
-    digitalWrite(led_output_pin_, current_led_turn_on_ ? HIGH : LOW);  // 冒號 LED 每秒亮暗切換
+    digitalWrite(kColonLedPin, current_led_turn_on_ ? HIGH : LOW);  // 冒號 LED 每秒亮暗切換
     current_led_turn_on_ = !current_led_turn_on_;
   }
   if (kDriftCompensation && now.second == kDriftFixSecond && current_mode_ == ClockMode::Normal) {
@@ -702,8 +635,12 @@ void NixieTubeClock::BlinkTube(){
     const uint8_t shown = FieldOf(now, unit);
     if(shown != last_logged_show_value_){
       last_logged_show_value_ = shown;
-      Serial.println(String("[SHOW] ") + kUnitNames[unit] + " tube <- " + String(shown) +
-                     ", " + Describe595(time_registers_[unit].LastData()));
+      Serial.print(F("[SHOW] "));
+      Serial.print(kUnitNames[unit]);
+      Serial.print(F(" tube <- "));
+      Serial.print(shown);
+      Serial.print(F(", "));
+      Print595Line(time_registers_[unit].LastData());
     }
   }
 }
@@ -735,14 +672,25 @@ void NixieTubeClock::AdjustTime(){
     if (readback == target) {
       break;
     }
-    Serial.println("[ADD] RTC write #" + String(attempt) + " read back " + String(readback) +
-                   ", expected " + String(target));
+    Serial.print(F("[ADD] RTC write #"));
+    Serial.print(attempt);
+    Serial.print(F(" read back "));
+    Serial.print(readback);
+    Serial.print(F(", expected "));
+    Serial.println(target);
   }
 
   if (kVerboseLog) {
-    Serial.println(String("[ADD] ") + kUnitNames[unit] + ": " + String(before) + " -> " +
-                   String(target) + ", RTC readback=" + String(readback) + ", " +
-                   Describe595(time_registers_[unit].LastData()));
+    Serial.print(F("[ADD] "));
+    Serial.print(kUnitNames[unit]);
+    Serial.print(F(": "));
+    Serial.print(before);
+    Serial.print(F(" -> "));
+    Serial.print(target);
+    Serial.print(F(", RTC readback="));
+    Serial.print(readback);
+    Serial.print(F(", "));
+    Print595Line(time_registers_[unit].LastData());
   } else {
     // 短短一行, 按住每秒加 20 下時序列埠也來得及送
     Serial.print(kUnitNames[unit]);
