@@ -2,7 +2,7 @@
 #define CONFIG_H
 
 // 所有可以調的設定都在這裡; 改完重新燒錄即可。
-// 只給 nixie_tube_clock.cpp include (const 只在 include 它的檔案裡看得到)
+// 只給 .cpp include (const 只在 include 它的檔案裡看得到, 好幾個 .cpp 一起用也不會重複定義)
 
 #include <Arduino.h>
 
@@ -57,8 +57,8 @@ const int kBrightnessEepromAddress = 64;  // EEPROM 0 開始的那段給 drift_c
 const unsigned long kAutoCleanMinSeconds = 15;
 const unsigned long kAutoCleanMaxSeconds = 60;
 const uint8_t kTubeCleanSteps = 20;     // 10 個數字 x 2 輪, 每個數字亮的時間一樣
-const float kCleanFirstStepMs = 70;
-const float kCleanStepSpeedUpMs = 1.0;
+const unsigned long kCleanFirstStepMs = 70;
+const unsigned long kCleanStepSpeedUpMs = 1;
 // 清管時每一步顯示的數字 (時分秒都一樣), 由管子的後到前
 const byte kTubeShowNumbers[10] = {11, 66, 22, 55, 0, 44, 77, 99, 88, 33};
 

@@ -47,6 +47,11 @@ namespace TubeDriver {
 
 void Begin(const uint8_t latch_pins[kRegisters], const uint8_t clock_pins[kRegisters],
            const uint8_t data_pins[kRegisters]) {
+  for (uint8_t i = 0; i < kRegisters; ++i) {
+    pinMode(latch_pins[i], OUTPUT);
+    pinMode(clock_pins[i], OUTPUT);
+    pinMode(data_pins[i], OUTPUT);
+  }
   noInterrupts();
   for (uint8_t i = 0; i < kRegisters; ++i) {
     Register& r = g_registers[i];

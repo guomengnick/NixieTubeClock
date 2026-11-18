@@ -79,11 +79,13 @@ You can also type in the serial monitor (9600 baud, newline): `?` to query, `T20
 | 檔案 File | 內容 Contents |
 |---|---|
 | `main/config.h` | 所有可調的設定與腳位 / every tunable setting and pin |
-| `main/nixie_tube_clock.*` | 主邏輯：模式、按鈕、清管、動畫 / main logic: modes, buttons, cleaning, animations |
+| `main/nixie_tube_clock.*` | 主邏輯：狀態機 (走時、看日期、設定時間/亮度)、USB 對時 / main logic: state machine (time, date, time/brightness setting), USB sync |
+| `main/display.*` | 6 支管子要顯示什麼數字 / which digit each of the 6 tubes shows |
+| `main/animations.*` | 清管、滾輪換字、解碼秀 / cleaning, slot-machine roll, decode show |
+| `main/button_input.h`, `main/button.h` | 兩顆按鈕 -> 短按/長按/一起按事件、防抖 / button gestures (tap, hold, both) and debounce |
 | `main/tube_driver.*` | 中斷送 595：淡入淡出、亮度 / interrupt-driven 595 output: fades, brightness |
 | `main/colon_led.*`, `main/fast_tick.*` | 冒號呼吸燈、Timer2 16 kHz 中斷 / breathing colon, Timer2 16 kHz interrupt |
 | `main/time_sync.*`, `main/drift_comp.*` | USB 對時指令、DS1302 誤差補償 / USB sync commands, DS1302 drift compensation |
-| `main/button.h`, `main/shift_register.h` | 按鈕防抖、595 資料格式 / button debounce, 595 data format |
 | `tools/sync_time.*` | 電腦端對時腳本 / PC-side sync script |
 
 ---

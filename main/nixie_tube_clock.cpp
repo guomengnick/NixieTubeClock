@@ -1,7 +1,6 @@
-#include <Arduino.h>
-#include <EEPROM.h>
-
 #include "nixie_tube_clock.h"
+
+#include <EEPROM.h>
 
 #include "colon_led.h"
 #include "config.h"
@@ -10,21 +9,17 @@
 #include "time_sync.h"
 #include "tube_driver.h"
 
-namespace{
-  const char* const kUnitNames[3] = {"second", "minute", "hour"};
+namespace {
+  const char* const kUnitNames[3] = {"second", "minute", "hour"};  // 順序 = TimeUnit
 
-  TimeUnit UnitOfMode(ClockMode mode){
-    return mode == SettingHour ? Hour : (mode == SettingMinute ? Minut : Second);
-  }
-
-  uint8_t& FieldOf(Ds1302::DateTime& t, TimeUnit unit){
-    return unit == Hour ? t.hour : (unit == Minut ? t.minute : t.second);
+  uint8_t& FieldOf(Ds1302::DateTime& t, TimeUnit unit) {
+    return unit == kHour ? t.hour : (unit == kMinute ? t.minute : t.second);
   }
 
   // 把送進 74HC595 的 byte 印成 "595 Q7..Q0=0001 0001 (ones=1 tens=1)" 並換行
   // 高 4 位 (Q7..Q4) 接個位數 K155ID1 的 D C B A, 低 4 位 (Q3..Q0) 接十位數; 15 = 不亮
   // (直接 print, 不用 String 串接: Nano 只有 2KB RAM, String 反覆配置會讓記憶體碎掉)
-  void Print595Line(int data){
+  void Print595Line(int data) {
     if (data < 0) {
       Serial.println(F("595 not sent yet"));
       return;
@@ -44,47 +39,28 @@ namespace{
   }
 }
 
-
 NixieTubeClock::NixieTubeClock()
-  : real_time_clock_(Ds1302(kRtcEnablePin, kRtcClockPin, kRtcDataPin)),
-    time_registers_{ ShiftRegister(Second, kSecondLatchPin, kSecondClockPin, kSecondDataPin),
-      ShiftRegister(Minut, kMinuteLatchPin, kMinuteClockPin, kMinuteDataPin),
-      ShiftRegister(Hour, kHourLatchPin, kHourClockPin, kHourDataPin) },
-    back_set_btn_(kBackButtonPin),
-    front_add_btn_(kFrontButtonPin),
-    current_mode_(ClockMode::Normal){
+  : rtc_(kRtcEnablePin, kRtcClockPin, kRtcDataPin),
+    buttons_(kBackButtonPin, kFrontButtonPin, kEnterBrightnessHoldMs, kEnterSettingHoldMs,
+             kManualCleanHoldMs) {
   // 這裡不碰硬體: 全域物件的建構子比 Arduino 的 init() 和 setup() 都早跑,
   // 這時候 Serial 還沒開, 印出來的字會直接不見
 }
 
-void NixieTubeClock::Setup(){
-  SetRealTimeClock();  // 要在 Serial.begin() 之後, "RTC is halted" 才印得出來
-  back_set_btn_.Begin();
-  front_add_btn_.Begin();
-  // 解碼秀的亂數每次開機都不一樣
-  randomSeed(analogRead(kRandomSeedPin));
+void NixieTubeClock::Setup() {
+  InitRtc();
+  buttons_.Begin();
+  randomSeed(analogRead(kRandomSeedPin));  // 解碼秀、清管間隔的亂數每次開機都不一樣
 
   // 從這裡開始, 送給 595 的資料都由 Timer2 中斷送出 (淡入淡出要準時切換)
-  uint8_t latch_pins[TubeDriver::kRegisters];
-  uint8_t clock_pins[TubeDriver::kRegisters];
-  uint8_t data_pins[TubeDriver::kRegisters];
-  for (uint8_t i = 0; i < TubeDriver::kRegisters; ++i) {
-    latch_pins[i] = time_registers_[i].latch_pin();
-    clock_pins[i] = time_registers_[i].clock_pin();
-    data_pins[i] = time_registers_[i].data_pin();
-  }
-  TubeDriver::Begin(latch_pins, clock_pins, data_pins);
+  display_.Begin();
   if (kColonBreathing) {
     ColonLed::Begin(kColonLedPin);
+  } else {
+    pinMode(kColonLedPin, OUTPUT);
   }
   FastTick::Begin();
-
-  brightness_percent_ = EEPROM.read(kBrightnessEepromAddress);
-  if (brightness_percent_ < kBrightnessMin || brightness_percent_ > kBrightnessMax ||
-      brightness_percent_ % kBrightnessStep != 0) {
-    brightness_percent_ = kBrightnessDefault;  // 沒存過 (EEPROM 預設 0xFF) 或資料不對
-  }
-  ApplyBrightness(false);
+  LoadBrightness();
 
   DriftComp::Begin();
   if (rtc_was_reset_) {
@@ -95,198 +71,210 @@ void NixieTubeClock::Setup(){
     // 關機期間 RTC 靠電池照樣跑快/跑慢, 開機時一次補回來。
     // 先等到跳秒那一刻再寫, 不會吃掉這一秒已經走掉的零頭
     Ds1302::DateTime now;
-    real_time_clock_.getDateTime(&now);
+    rtc_.getDateTime(&now);
     if (DriftComp::DueSeconds(TimeSync::ToEpoch(now)) != 0) {
       const uint8_t second = now.second;
       const unsigned long wait_start = millis();
       while (now.second == second && millis() - wait_start < 1100) {
-        real_time_clock_.getDateTime(&now);
+        rtc_.getDateTime(&now);
       }
       ApplyDriftCompensation(&now);
     }
   }
 
   if (kBootAnimation) {
-    Serial.println("[BOOT]");
-    RunDecodeShow(kBootSweepDigits, kBootSweepStepMs);
+    Serial.println(F("[BOOT]"));
+    RunDecodeShow(display_, rtc_, kBootSweepDigits, kBootSweepStepMs);
   }
-  ScheduleNextClean();
+  rtc_.getDateTime(&now_);
+  EnterState(State::kTime);
+  cleaner_.ScheduleNext();
 }
 
-// 6 支管子各自的數字 (由左到右: 時十 時個 分十 分個 秒十 秒個); 大於 9 (例如 255) = 該支不亮
-void NixieTubeClock::ShowDigits(const uint8_t digits[6], uint8_t fade_ticks){
-  const TimeUnit units[3] = {Hour, Minut, Second};
-  for (uint8_t pair = 0; pair < 3; ++pair) {
-    time_registers_[units[pair]].SetDigits(digits[pair * 2], digits[pair * 2 + 1], fade_ticks);
+void NixieTubeClock::Loop() {
+  buttons_.Update();
+  ReadClock();
+  HandleSerial();
+  HandleInput();
+  UpdateState();
+  if (new_second_) {
+    PrintSecondLine();
   }
 }
 
-// 日期顯示成 YY MM DD (USB 對時、短按 front 共用)
-void NixieTubeClock::ShowDate(const Ds1302::DateTime& date, uint8_t fade_ticks){
-  const uint8_t digits[6] = {
-    (uint8_t)(date.year / 10), (uint8_t)(date.year % 10),
-    (uint8_t)(date.month / 10), (uint8_t)(date.month % 10),
-    (uint8_t)(date.day / 10), (uint8_t)(date.day % 10)};
-  ShowDigits(digits, fade_ticks);
+//******************************** 狀態機 ********************************
+
+void NixieTubeClock::EnterState(State next) {
+  const State prev = state_;
+
+  // ---- 離開舊狀態 ----
+  if (prev == State::kCleaning) {
+    cleaner_.ScheduleNext();  // 清完或被打斷, 都從現在重新倒數
+  }
+  if (IsSettingTime(prev) && !IsSettingTime(next)) {
+    FinishTimeSetting();
+  }
+
+  state_ = next;
+  state_start_ms_ = millis();
+  last_activity_ms_ = millis();
+
+  // ---- 進入新狀態 ----
+  switch (next) {
+    case State::kTime:
+      display_.ShowTime(now_, kTimeFade);  // 從別的畫面柔和地換回時間
+      break;
+    case State::kRolling:
+      break;  // roll_.Start() 在決定要滾的時候已經做好
+    case State::kCleaning:
+      Serial.println(F("[MODE] clean"));
+      cleaner_.Start(display_);
+      break;
+    case State::kDate: {
+      char line[24];
+      snprintf_P(line, sizeof(line), PSTR("[MODE] date 20%02u-%02u-%02u"), now_.year, now_.month, now_.day);
+      Serial.println(line);
+      display_.ShowDate(now_, kTimeFade);
+      break;
+    }
+    case State::kSetSecond:
+    case State::kSetMinute:
+    case State::kSetHour:
+      Serial.print(F("[MODE] set "));
+      Serial.println(kUnitNames[SettingUnit()]);
+      blink_start_ms_ = millis();
+      last_logged_show_value_ = -1;
+      break;
+    case State::kSetBrightness:
+      Serial.println(F("[MODE] set brightness"));
+      ShowBrightness();
+      break;
+  }
 }
 
-//******************************** 看日期 ********************************
-// 正常模式下短按 front: 淡入日期, kDateShowMs 後淡回時間; 顯示中再短按就提早回去
-void NixieTubeClock::StartDateShow(){
-  if (date_showing_) {
-    date_showing_ = false;
-    ShowCurrentTime();
-    return;
+void NixieTubeClock::HandleInput() {
+  if (IsNormal(state_)) {
+    // 「正常」這一組的手勢都一樣, 不管現在是走時、滾輪、清管還是看日期
+    if (buttons_.Has(ButtonInput::kBothHold)) {
+      EnterState(State::kCleaning);
+    } else if (buttons_.Has(ButtonInput::kBackHold)) {
+      EnterState(State::kSetSecond);
+    } else if (buttons_.Has(ButtonInput::kFrontHold)) {
+      EnterState(State::kSetBrightness);
+    } else if (buttons_.Has(ButtonInput::kFrontTap)) {
+      EnterState(state_ == State::kDate ? State::kTime : State::kDate);
+    }
+  } else if (state_ == State::kSetBrightness) {
+    HandleBrightnessInput();
+  } else {
+    HandleTimeSettingInput();
   }
-  if (cleaning_) {  // 清管到一半就停掉, 下一次重新倒數
-    cleaning_ = false;
-    ScheduleNextClean();
+}
+
+void NixieTubeClock::UpdateState() {
+  switch (state_) {
+    case State::kTime:
+      if (new_second_) {
+        if (kChime && now_.second == 0 && now_.minute % kChimeEveryMinutes == 0) {
+          Serial.println(F("[CHIME]"));
+          RunDecodeShow(display_, rtc_, kChimeSweepDigits, kChimeSweepStepMs);
+          break;
+        }
+        if (kRollOnMinute && now_.second == 0 && roll_.Start(display_, now_)) {
+          EnterState(State::kRolling);  // 時、分交給滾輪, 秒在 kRolling 裡照常更新
+          display_.ShowNumber(kSecond, now_.second, kTimeFade);
+          break;
+        }
+        display_.ShowTime(now_, kTimeFade);
+      }
+      if (cleaner_.Due()) {
+        EnterState(State::kCleaning);
+      }
+      break;
+
+    case State::kRolling:
+      if (new_second_) {
+        display_.ShowNumber(kSecond, now_.second, kTimeFade);
+      }
+      if (!roll_.Update(display_)) {
+        EnterState(State::kTime);
+      }
+      break;
+
+    case State::kCleaning:
+      if (!cleaner_.Update(display_)) {
+        EnterState(State::kTime);
+      }
+      break;
+
+    case State::kDate:
+      if (millis() - state_start_ms_ >= kDateShowMs) {
+        EnterState(State::kTime);
+      }
+      break;
+
+    case State::kSetSecond:
+    case State::kSetMinute:
+    case State::kSetHour:
+      if (millis() - last_activity_ms_ > kSettingTimeoutMs) {
+        EnterState(State::kTime);
+      } else {
+        BlinkSettingTube();
+      }
+      break;
+
+    case State::kSetBrightness:
+      if (millis() - last_activity_ms_ > kBrightnessTimeoutMs) {
+        EnterState(State::kTime);
+      }
+      break;
   }
-  rolling_ = false;
-  date_showing_ = true;
-  date_start_millsecond_ = millis();
-  Ds1302::DateTime now;
-  real_time_clock_.getDateTime(&now);
-  char line[20];
-  snprintf_P(line, sizeof(line), PSTR("[DATE] 20%02u-%02u-%02u"), now.year, now.month, now.day);
+}
+
+//******************************** 時間、冒號、日誌 ********************************
+
+void NixieTubeClock::ReadClock() {
+  rtc_.getDateTime(&now_);
+  new_second_ = now_.second != last_second_;
+  UpdateColon();
+  if (new_second_ && kDriftCompensation && now_.second == kDriftFixSecond && IsNormal(state_)) {
+    ApplyDriftCompensation(&now_);  // 剛跳秒就撥, 不會吃掉零頭
+  }
+  last_second_ = now_.second;
+}
+
+void NixieTubeClock::UpdateColon() {
+  if (kColonBreathing) {
+    // 偶數秒開始吸氣、奇數秒開始吐氣, 呼吸跟著秒數走, 不會跟時鐘慢慢錯開
+    if (new_second_ && now_.second % 2 == 0) {
+      breath_start_ms_ = millis();
+    }
+    ColonLed::Update(millis() - breath_start_ms_);
+  } else if (new_second_) {
+    digitalWrite(kColonLedPin, now_.second % 2 == 0 ? HIGH : LOW);  // 亮 1 秒暗 1 秒
+  }
+}
+
+// 每秒一行, 補零對齊: "10:00:06", 不是正常走時就在後面標註狀態
+void NixieTubeClock::PrintSecondLine() {
+  const char* tag = "";
+  switch (state_) {
+    case State::kTime: break;
+    case State::kRolling: tag = "  [roll]"; break;
+    case State::kCleaning: tag = "  [clean]"; break;
+    case State::kDate: tag = "  [date]"; break;
+    case State::kSetSecond: tag = "  [set second]"; break;
+    case State::kSetMinute: tag = "  [set minute]"; break;
+    case State::kSetHour: tag = "  [set hour]"; break;
+    case State::kSetBrightness: tag = "  [set brightness]"; break;
+  }
+  char line[28];
+  snprintf(line, sizeof(line), "%02u:%02u:%02u%s", now_.hour, now_.minute, now_.second, tag);
   Serial.println(line);
-  ShowDate(now, kTimeFade);
-}
-
-void NixieTubeClock::UpdateDateShow(){
-  if (!date_showing_) {
-    return;
-  }
-  if (current_mode_ != ClockMode::Normal || cleaning_) {
-    date_showing_ = false;  // 進設定模式或手動清管, 交給它們顯示
-    return;
-  }
-  if (millis() - date_start_millsecond_ >= kDateShowMs) {
-    date_showing_ = false;
-    ShowCurrentTime();
-  }
-}
-
-//******************************** 滾輪換字 ********************************
-// 每分鐘 0 秒呼叫: 時、分 4 支管子裡數字有變的開始滾 (說明見 config.h 的 kRollOnMinute)
-void NixieTubeClock::StartRoll(const Ds1302::DateTime& now){
-  const int hour_data = time_registers_[Hour].LastData();
-  const int minute_data = time_registers_[Minut].LastData();
-  if (hour_data < 0 || minute_data < 0) {
-    return;  // 還沒顯示過, 沒有「舊數字」可以從那裡滾
-  }
-  // 595 資料: 高 4 位 = 個位數, 低 4 位 = 十位數; 大於 9 = 原本不亮
-  const uint8_t shown[4] = {
-    (uint8_t)(hour_data & 0x0F), (uint8_t)(hour_data >> 4),
-    (uint8_t)(minute_data & 0x0F), (uint8_t)(minute_data >> 4)};
-  const uint8_t target[4] = {
-    (uint8_t)(now.hour / 10), (uint8_t)(now.hour % 10),
-    (uint8_t)(now.minute / 10), (uint8_t)(now.minute % 10)};
-
-  uint8_t min_steps = kRollMinSteps;
-  rolling_ = false;
-  for (uint8_t i = 0; i < 4; ++i) {
-    roll_digit_[i] = target[i];
-    roll_steps_left_[i] = 0;
-    if (shown[i] == target[i]) {
-      continue;  // 沒變的管子不動
-    }
-    const uint8_t from = shown[i] <= 9 ? shown[i] : target[i];
-    // 從舊數字一格一格往上 (9 -> 0 繞回來), 至少 min_steps 格, 剛好停在新數字
-    uint8_t steps = min_steps;
-    while ((from + steps) % 10 != target[i]) {
-      ++steps;
-    }
-    roll_digit_[i] = from;
-    roll_steps_left_[i] = steps;
-    roll_next_millsecond_[i] = millis();  // 第一格馬上動
-    min_steps = steps + kRollStaggerSteps;  // 右邊那支比這支晚停
-    rolling_ = true;
-  }
-}
-
-void NixieTubeClock::UpdateRoll(){
-  if (!rolling_) {
-    return;
-  }
-  if (current_mode_ != ClockMode::Normal || cleaning_ || date_showing_) {
-    rolling_ = false;  // 被別的畫面接手, 它們會自己顯示
-    return;
-  }
-  const unsigned long now = millis();
-  bool changed = false;
-  bool still_rolling = false;
-  for (uint8_t i = 0; i < 4; ++i) {
-    if (roll_steps_left_[i] == 0) {
-      continue;
-    }
-    if ((long)(now - roll_next_millsecond_[i]) >= 0) {
-      roll_digit_[i] = (roll_digit_[i] + 1) % 10;
-      const uint8_t left = --roll_steps_left_[i];
-      // 最後 kRollSlowSteps 格越來越慢, 像滾輪停下來
-      unsigned long wait = kRollStepMs;
-      if (left > 0 && left <= kRollSlowSteps) {
-        wait += (kRollSlowSteps + 1 - left) * kRollSlowDownMs;
-      }
-      roll_next_millsecond_[i] = now + wait;
-      changed = true;
-    }
-    still_rolling = still_rolling || roll_steps_left_[i] > 0;
-  }
-  if (changed) {
-    ShowRollDigits();
-  }
-  rolling_ = still_rolling;  // 全部停好時顯示的就是新時間, 不用再補
-}
-
-void NixieTubeClock::ShowRollDigits(){
-  time_registers_[Hour].SetDigits(roll_digit_[0], roll_digit_[1], kRollFade);
-  time_registers_[Minut].SetDigits(roll_digit_[2], roll_digit_[3], kRollFade);
-}
-
-// 解碼秀 (說明見最上面的 kBootAnimation); 約 1.5 秒, 期間不讀按鈕
-// sweep_digits = nullptr 時跳過掃描, 直接解碼
-void NixieTubeClock::RunDecodeShow(const uint8_t sweep_digits[10], unsigned long sweep_step_ms){
-  uint8_t digits[6];
-
-  // 1. 掃描: 每支管子的 0~9 都亮過一次
-  for (uint8_t i = 0; sweep_digits != nullptr && i < 10; ++i) {
-    memset(digits, sweep_digits[i], sizeof(digits));
-    ShowDigits(digits);
-    delay(sweep_step_ms);
-  }
-
-  // 2. 解碼: 還沒鎖定的管子亂跳, 由左到右一支一支鎖定成現在時間
-  Ds1302::DateTime now;
-  real_time_clock_.getDateTime(&now);
-  const uint8_t target[6] = {
-    (uint8_t)(now.hour / 10), (uint8_t)(now.hour % 10),
-    (uint8_t)(now.minute / 10), (uint8_t)(now.minute % 10),
-    (uint8_t)(now.second / 10), (uint8_t)(now.second % 10)};
-  for (uint8_t locked = 0; locked < 6; ++locked) {
-    for (uint8_t frame = 0; frame < kBootFramesPerLock; ++frame) {
-      for (uint8_t i = 0; i < 6; ++i) {
-        digits[i] = i < locked ? target[i] : random(10);
-      }
-      ShowDigits(digits);
-      delay(kBootScrambleMs);
-    }
-  }
-
-  // 3. 閃斷: 熄 / 亮 / 熄 / 亮
-  for (uint8_t i = 0; i < 2; ++i) {
-    memset(digits, 255, sizeof(digits));
-    ShowDigits(digits);
-    delay(kBootGlitchMs);
-    ShowDigits(target);
-    delay(kBootGlitchMs);
-  }
-
-  ShowCurrentTime();  // 動畫期間秒數可能已經跳了, 以 RTC 為準
 }
 
 // USB 對時 (指令格式見 time_sync.h, 電腦端用 tools/sync_time.bat)
-void NixieTubeClock::HandleSerial(){
+void NixieTubeClock::HandleSerial() {
   Ds1302::DateTime received;
   const TimeSync::Command command = TimeSync::Poll(&received);
   if (command == TimeSync::kNone) {
@@ -294,23 +282,23 @@ void NixieTubeClock::HandleSerial(){
   }
   char text[20];
   Ds1302::DateTime clock_time;
-  real_time_clock_.getDateTime(&clock_time);
+  rtc_.getDateTime(&clock_time);  // 重讀一次: 誤差要算到這一刻
 
   if (command == TimeSync::kQuery) {
     TimeSync::Format(clock_time, text, sizeof(text));
-    Serial.print("NOW ");
+    Serial.print(F("NOW "));
     Serial.println(text);
     return;
   }
   if (command == TimeSync::kBad) {
-    Serial.println("ERR format, expected: T2026-11-18 10:00:00");
+    Serial.println(F("ERR format, expected: T2026-11-18 10:00:00"));
     return;
   }
 
   // 對時前時鐘快 (+) 或慢 (-) 了幾秒, 印出來就知道 DS1302 這段時間跑掉多少
   const long drift = TimeSync::DiffSeconds(clock_time, received);
   if (!WriteRtcVerified(received)) {
-    Serial.println("ERR RTC write failed");
+    Serial.println(F("ERR RTC write failed"));
     return;
   }
   const DriftComp::SyncInfo info = DriftComp::OnSync(TimeSync::ToEpoch(received), drift);
@@ -337,478 +325,76 @@ void NixieTubeClock::HandleSerial(){
     PrintDriftRate();
   }
 
-  // 讓人看得出來剛對完時: 跳出設定模式/清管, 先亮日期, 再解碼鎖定成新時間
-  current_mode_ = ClockMode::Normal;
-  time_adjusted_in_setting_ = false;  // 已經用 USB 對準了, 不用再當手動設定
-  cleaning_ = false;
-  date_showing_ = false;
-  rolling_ = false;
-  ShowDate(received, TubeDriver::kFadeInstant);
+  // 讓人看得出來剛對完時: 不管在哪個狀態都回到走時, 先亮日期, 再解碼鎖定成新時間
+  time_adjusted_ = false;  // 已經用 USB 對準了, 不用再當手動設定
+  now_ = received;
+  EnterState(State::kTime);
+  display_.ShowDate(received);
   delay(kSyncDateShowMs);
-  RunDecodeShow(nullptr, 0);
-  ScheduleNextClean();
+  RunDecodeShow(display_, rtc_, nullptr, 0);
+  cleaner_.ScheduleNext();
 }
 
-// 寫進 RTC 後讀回確認 (秒數允許差 1, 寫完剛好跳秒), 不一致就重寫
-bool NixieTubeClock::WriteRtcVerified(const Ds1302::DateTime& time){
-  Ds1302::DateTime writable = time;
-  for (uint8_t attempt = 1; attempt <= kRtcWriteTries; ++attempt) {
-    real_time_clock_.setDateTime(&writable);
-    Ds1302::DateTime check;
-    real_time_clock_.getDateTime(&check);
-    const long diff = TimeSync::DiffSeconds(check, time);
-    if (diff >= 0 && diff <= 1) {
-      return true;
-    }
-  }
-  return false;
+//******************************** 設定時間 ********************************
+
+TimeUnit NixieTubeClock::SettingUnit() const {
+  return state_ == State::kSetHour ? kHour : (state_ == State::kSetMinute ? kMinute : kSecond);
 }
 
-// 時鐘快/慢累積滿 1 秒就撥回來 (見 drift_comp.h); now 會更新成撥完的時間
-void NixieTubeClock::ApplyDriftCompensation(Ds1302::DateTime* now){
-  const long due = DriftComp::DueSeconds(TimeSync::ToEpoch(*now));
-  if (due == 0) {
-    return;
+// back: 切換 秒 -> 分 -> 時 -> 秒; front: 按一下 +1, 按住越久加越快, 放開就停
+void NixieTubeClock::HandleTimeSettingInput() {
+  if (buttons_.Has(ButtonInput::kBackPress)) {
+    EnterState(state_ == State::kSetSecond ? State::kSetMinute
+               : state_ == State::kSetMinute ? State::kSetHour : State::kSetSecond);
   }
-  Ds1302::DateTime fixed;
-  TimeSync::FromEpoch(TimeSync::ToEpoch(*now) - due, &fixed);
-  if (!WriteRtcVerified(fixed)) {
-    Serial.println(F("[DRIFT] RTC write failed"));
-    return;
-  }
-  DriftComp::MarkApplied(due);
-  *now = fixed;
-  Serial.print(F("[DRIFT] clock was "));
-  Serial.print(due > 0 ? F("fast") : F("slow"));
-  Serial.print(F(", moved "));
-  Serial.print(due > 0 ? F("back ") : F("forward "));
-  Serial.print(labs(due));
-  Serial.println(F(" s"));
-}
-
-// 印出目前的速率, 例如 "[DRIFT] rate +23150 ppb (+2.00 s/day)"
-void NixieTubeClock::PrintDriftRate(){
-  if (!DriftComp::HasRate()) {
-    Serial.println(F("[DRIFT] rate not measured yet (needs 2 USB syncs >= 3 days apart)"));
-    return;
-  }
-  const long ppb = DriftComp::RatePpb();
-  // 每天幾秒 = ppb * 86400 / 1e9; 印到小數 2 位 -> 以 0.01 秒為單位
-  const long centi = (long)(((int64_t)ppb * 86400LL + (ppb >= 0 ? 5000000LL : -5000000LL)) / 10000000LL);
-  char line[48];
-  snprintf(line, sizeof(line), "[DRIFT] rate %+ld ppb (%c%ld.%02ld s/day)",
-           ppb, centi < 0 ? '-' : '+', labs(centi) / 100, labs(centi) % 100);
-  Serial.println(line);
-}
-
-// 每個 loop 只讀一次按鈕，所有邏輯都用同一份防抖後的狀態，且不使用 delay()
-void NixieTubeClock::CheckButtonStatus(){
-  back_set_btn_.Update();
-  front_add_btn_.Update();
-
-  // 短按 front (沒有拿去做別的事就放開) = 看日期; 要在下面清掉 used 旗標之前判斷
-  // 長按 2 秒進亮度、設定時間時按的、兩顆一起按的, 都會設 front_btn_used_in_combo_, 放開不會跳日期
-  const bool front_tapped = front_add_btn_.WasReleased() && !front_btn_used_in_combo_ &&
-                            current_mode_ == ClockMode::Normal;
-
-  // back 放開前只要 front 也按過，就當作是「兩顆一起按」，不會誤進設定模式
-  if (!back_set_btn_.IsPressed()) {
-    back_btn_used_in_combo_ = false;
-  } else if (front_add_btn_.IsPressed()) {
-    back_btn_used_in_combo_ = true;
-  }
-  if (!front_add_btn_.IsPressed()) {
-    front_btn_used_in_combo_ = false;
-  } else if (back_set_btn_.IsPressed()) {
-    front_btn_used_in_combo_ = true;
-  }
-
-  ProcessCleanTube();
-  ProcessSettingTime();
-  if (front_tapped) {
-    StartDateShow();
-  }
-  UpdateDateShow();
-  UpdateRoll();
-}
-
-void NixieTubeClock::ProcessCleanTube(){
-  CheckIfExecuteCleanTubeMode();//手動清輝光管
-  AutoCleanTube();//每 15~60 秒自動清管
-  UpdateCleanTube();//非阻塞地推進清理動畫
-}
-
-void NixieTubeClock::UpdateTimeIfNextSecond(){
-  static uint8_t last_second_ = 0;
-  Ds1302::DateTime now;
-  real_time_clock_.getDateTime(&now);// get the current time
-  const bool new_second = last_second_ != now.second;
-  if (kColonBreathing) {
-    // 偶數秒開始吸氣、奇數秒開始吐氣, 呼吸跟著秒數走, 不會跟時鐘慢慢錯開
-    if (new_second && now.second % 2 == 0) {
-      breath_start_millsecond_ = millis();
-    }
-    ColonLed::Update(millis() - breath_start_millsecond_);
-  }
-  if (!new_second){
-    return;
-  }
-  if (!kColonBreathing) {
-    static bool current_led_turn_on_ = false;
-    digitalWrite(kColonLedPin, current_led_turn_on_ ? HIGH : LOW);  // 冒號 LED 每秒亮暗切換
-    current_led_turn_on_ = !current_led_turn_on_;
-  }
-  if (kDriftCompensation && now.second == kDriftFixSecond && current_mode_ == ClockMode::Normal) {
-    ApplyDriftCompensation(&now);  // 剛跳秒就撥, 不會吃掉零頭
-  }
-  last_second_ = now.second;
-
-  // 每秒一行, 補零對齊: "10:00:06", 設定/清理中在後面標註狀態 (原本另外印 ON/OFF 兩行很雜)
-  const char* tag = "";
-  if (cleaning_) {
-    tag = "  [clean]";
-  } else if (current_mode_ == SettingSecond) {
-    tag = "  [set second]";
-  } else if (current_mode_ == SettingMinute) {
-    tag = "  [set minute]";
-  } else if (current_mode_ == SettingHour) {
-    tag = "  [set hour]";
-  } else if (current_mode_ == SettingBrightness) {
-    tag = "  [set brightness]";
-  } else if (date_showing_) {
-    tag = "  [date]";
-  }
-  char line[28];
-  snprintf(line, sizeof(line), "%02u:%02u:%02u%s", now.hour, now.minute, now.second, tag);
-  Serial.println(line);
-
-  if(current_mode_ != ClockMode::Normal || cleaning_ || date_showing_){
-    return;//設定模式、清理管子、看日期中, 不覆蓋顯示
-  }
-  if (kChime && now.second == 0 && now.minute % kChimeEveryMinutes == 0) {
-    Serial.println("[CHIME]");
-    RunDecodeShow(kChimeSweepDigits, kChimeSweepStepMs);  // 最後會自己顯示現在時間
-    return;
-  }
-  if (kRollOnMinute && now.second == 0 && !rolling_) {
-    StartRoll(now);  // 換分鐘: 時、分交給滾輪, 由 UpdateRoll() 一格一格推
-  }
-  if (rolling_) {
-    time_registers_[Second].SetClockTime(now.second, kTimeFade);  // 滾動中只更新秒
-    return;
-  }
-  SetTime(now, kTimeFade);
-}
-
-void NixieTubeClock::SetRealTimeClock(){
-  real_time_clock_.init();
-  if (real_time_clock_.isHalted()){// if is halted, set a date-time
-    Serial.println("RTC is halted. Setting time...");
-    rtc_was_reset_ = true;
-    Ds1302::DateTime dt = {.year = 24, .month = Ds1302::MONTH_OCT,
-      .day = 3,.hour = 2, .minute = 2, .second = 22, .dow = Ds1302::DOW_TUE};
-    real_time_clock_.setDateTime(&dt);
-  }
-}
-
-void NixieTubeClock::CheckIfExecuteCleanTubeMode(){
-  const bool both_pressed = back_set_btn_.IsPressed() && front_add_btn_.IsPressed();
-  if (!both_pressed) {
-    manual_clean_triggered_ = false; // 放開後才能再觸發下一次
-    return;
-  }
-  if (manual_clean_triggered_ || current_mode_ != ClockMode::Normal) {
-    return;
-  }
-  // 兩顆都已穩定按住超過1秒
-  if (back_set_btn_.PressedDurationMs() > kManualCleanHoldMs &&
-      front_add_btn_.PressedDurationMs() > kManualCleanHoldMs) {
-    manual_clean_triggered_ = true;
-    Serial.println("Manual clean tube");
-    StartCleanTube();
-  }
-}
-
-// 清理管子改成狀態機: 原本 CleanTube() 用 delay() 卡住約 2.2 秒, 期間按鈕完全讀不到
-void NixieTubeClock::ScheduleNextClean(){
-  last_clean_tube_time_millsecond_ = millis();
-  next_clean_after_seconds_ = random(kAutoCleanMinSeconds, kAutoCleanMaxSeconds + 1);
-  Serial.print("[CLEAN] next in ");
-  Serial.print(next_clean_after_seconds_);
-  Serial.println(F(" s"));
-}
-
-void NixieTubeClock::AutoCleanTube(){
-  if(current_mode_ != ClockMode::Normal || cleaning_ || date_showing_ || rolling_){
-    return;//只在正常模式下清理管子; 看日期、滾輪換字時等它結束
-  }
-  if((millis() - last_clean_tube_time_millsecond_) / 1000 >= next_clean_after_seconds_){
-    StartCleanTube();
-  }
-}
-
-void NixieTubeClock::StartCleanTube(){
-  cleaning_ = true;
-  clean_step_ = 0;
-  clean_step_delay_millsecond_ = kCleanFirstStepMs;
-  ShowCleanStep();
-  clean_step_start_millsecond_ = millis();
-}
-
-void NixieTubeClock::UpdateCleanTube(){
-  if(!cleaning_){
-    return;
-  }
-  const bool interrupted = current_mode_ != ClockMode::Normal; // 清理中進入設定模式就停止
-  if(!interrupted &&
-     millis() - clean_step_start_millsecond_ < (unsigned long)clean_step_delay_millsecond_){
-    return;
-  }
-  clean_step_++;
-  clean_step_delay_millsecond_ -= kCleanStepSpeedUpMs;
-  if(interrupted || clean_step_ >= kTubeCleanSteps){
-    cleaning_ = false;
-    ScheduleNextClean();  // 手動或自動清完都從現在重新倒數
-    if(!interrupted){
-      ShowCurrentTime();//清理完管子後, 馬上顯示當前時間
-    }
-    return;
-  }
-  ShowCleanStep();
-  clean_step_start_millsecond_ = millis();
-}
-
-void NixieTubeClock::ShowCleanStep(){
-  const int show_num = kTubeShowNumbers[clean_step_ % 10];
-  Ds1302::DateTime now;
-  now.second = show_num;
-  now.minute = show_num;
-  now.hour = show_num;
-  SetTime(now, kCleanFade);  // 每一步快速溶接到下一個數字, 看起來像在流動
-}
-
-void NixieTubeClock::ShowCurrentTime(){
-  Ds1302::DateTime now;
-  real_time_clock_.getDateTime(&now);
-  SetTime(now, kTimeFade);  // 清管結束、離開設定模式時也柔和地換回時間
-}
-
-
-void NixieTubeClock::ProcessSettingTime(){
-  if(current_mode_ == ClockMode::Normal){
-    CheckIfExecuteSettingTimeMode();
-    CheckIfExecuteBrightnessMode();
-    return;
-  }
-  if(current_mode_ == ClockMode::SettingBrightness){
-    ProcessBrightnessSetting();
-    return;
-  }
-
-  if(back_set_btn_.WasPressed()){ // 只在「剛按下」的那一刻觸發一次
-    SwitchSettingTimeUnit();//是否second minute hour 切換
-  }
-  ProcessAddButtonInSetting();
-  // 經過８秒沒按任何按鍵, 就變成正常模式
-  if(millis() - last_setting_activity_millsecond_ > kSettingTimeoutMs){
-    current_mode_ = ClockMode::Normal;
-    Serial.println("Set back to normal");
-    if (time_adjusted_in_setting_) {
-      // 手動改過時間: 補償從現在重新起算 (離開時才寫一次 EEPROM, 按住連加不會一直寫)
-      time_adjusted_in_setting_ = false;
-      Ds1302::DateTime now;
-      real_time_clock_.getDateTime(&now);
-      DriftComp::OnManualSet(TimeSync::ToEpoch(now));
-    }
-    ShowCurrentTime();
-    return;
-  }
-  BlinkTube();//閃爍當前設定的管子
-}
-
-
-void NixieTubeClock::CheckIfExecuteSettingTimeMode(){
-  // 如果在正常模式下長按back_button 且add按鈕沒按(清理模式會按著2顆按鈕)，則進入設定模式
-  if (!back_set_btn_.IsPressed() || front_add_btn_.IsPressed() || back_btn_used_in_combo_){
-    return;
-  }
-  if (back_set_btn_.PressedDurationMs() > kEnterSettingHoldMs){ // 長按超過3秒
-    Serial.println("Entering setting second mode");
-    current_mode_ = ClockMode::SettingSecond; // 進入設定秒數模式
-    last_logged_show_value_ = -1;
-    last_blink_millsecond_ = millis();
-    last_setting_activity_millsecond_ = millis();
-  }
-}
-
-void NixieTubeClock::CheckIfExecuteBrightnessMode(){
-  if (current_mode_ != ClockMode::Normal || !front_add_btn_.IsPressed() ||
-      back_set_btn_.IsPressed() || front_btn_used_in_combo_){
-    return;
-  }
-  if (front_add_btn_.PressedDurationMs() > kEnterBrightnessHoldMs){
-    Serial.println(F("Entering brightness mode"));
-    current_mode_ = ClockMode::SettingBrightness;
-    front_btn_used_in_combo_ = true;  // 這次按住已經用掉了, 放開前不會再觸發一次
-    last_setting_activity_millsecond_ = millis();
-    ShowBrightness();
-  }
-}
-
-// 亮度設定: front 亮一階, back 暗一階, 到頭就停在那裡
-void NixieTubeClock::ProcessBrightnessSetting(){
-  int8_t step = 0;
-  if (front_add_btn_.WasPressed()) {
-    step = 1;
-  }
-  if (back_set_btn_.WasPressed()) {
-    step = -1;
-    back_btn_used_in_combo_ = true;  // 放開前不會因為按太久誤進時間設定
-  }
-  if (step != 0) {
-    last_setting_activity_millsecond_ = millis();
-    const int next = brightness_percent_ + step * kBrightnessStep;
-    if (next >= kBrightnessMin && next <= kBrightnessMax) {
-      brightness_percent_ = next;
-      ApplyBrightness(true);
-    }
-    ShowBrightness();
-  }
-  if (millis() - last_setting_activity_millsecond_ > kBrightnessTimeoutMs) {
-    current_mode_ = ClockMode::Normal;
-    Serial.println(F("Brightness set, back to normal"));
-    ShowCurrentTime();
-  }
-}
-
-void NixieTubeClock::ApplyBrightness(bool save){
-  TubeDriver::SetBrightness(brightness_percent_);
-  ColonLed::SetBrightness(brightness_percent_);
-  if (save) {
-    EEPROM.update(kBrightnessEepromAddress, brightness_percent_);  // 沒變就不寫
-  }
-  Serial.print(F("[BRIGHTNESS] "));
-  Serial.print(brightness_percent_);
-  Serial.println('%');
-}
-
-// 亮度顯示在右邊 3 支管子, 例如 "    80" / "   100", 其他不亮
-void NixieTubeClock::ShowBrightness(){
-  const uint8_t p = brightness_percent_;
-  const uint8_t digits[6] = {255, 255, 255,
-                             (uint8_t)(p >= 100 ? p / 100 : 255), (uint8_t)(p / 10 % 10), (uint8_t)(p % 10)};
-  ShowDigits(digits);
-}
-
-// 設定模式下的 front 按鍵: 按一下 +1, 按住越久加越快, 放開就停
-void NixieTubeClock::ProcessAddButtonInSetting(){
-  if(front_add_btn_.WasPressed()){
-    front_btn_used_in_combo_ = true;  // 設定時間用掉的按住, 回到正常模式後不會誤進亮度設定
-    last_setting_activity_millsecond_ = millis();//有按按鍵,更新上次按下的時間
+  if (buttons_.Has(ButtonInput::kFrontPress)) {
+    last_activity_ms_ = millis();
     AdjustTime();
-    last_repeat_millsecond_ = millis();
+    repeat_last_ms_ = millis();
     repeat_interval_ms_ = kRepeatStartIntervalMs;  // 每次重新按下都從慢速開始
     return;
   }
   // 秒只能歸零, 不需要連加; 兩顆一起按時也不連加
-  if(!front_add_btn_.IsPressed() || back_set_btn_.IsPressed() ||
-     current_mode_ == ClockMode::SettingSecond){
+  const Button& front = buttons_.front();
+  if (!front.IsPressed() || buttons_.back().IsPressed() || state_ == State::kSetSecond) {
     return;
   }
-  last_setting_activity_millsecond_ = millis();//按住期間不會逾時跳回正常模式
-  if(front_add_btn_.PressedDurationMs() < kRepeatDelayMs){
+  last_activity_ms_ = millis();  // 按住期間不會逾時跳回正常模式
+  if (front.PressedDurationMs() < kRepeatDelayMs) {
     return;
   }
-  if(millis() - last_repeat_millsecond_ >= repeat_interval_ms_){
-    last_repeat_millsecond_ = millis();
+  if (millis() - repeat_last_ms_ >= repeat_interval_ms_) {
+    repeat_last_ms_ = millis();
     AdjustTime();
     // 每加一次, 下一次的間隔縮短一點, 直到最快速度
-    repeat_interval_ms_ = max(kRepeatMinIntervalMs,
-                              repeat_interval_ms_ * kRepeatSpeedUpPercent / 100);
+    repeat_interval_ms_ = max(kRepeatMinIntervalMs, repeat_interval_ms_ * kRepeatSpeedUpPercent / 100);
   }
 }
 
-// 在設定模式下切換設定項目, second->minute->hour->second...
-void NixieTubeClock::SwitchSettingTimeUnit(){
-  last_setting_activity_millsecond_ = millis();
-
-  // 使用單一語句循環切換模式
-  current_mode_ = static_cast<ClockMode>((current_mode_ + 1 - SettingSecond) % 3 + SettingSecond);
-
-  if (current_mode_ == SettingSecond){
-    Serial.println("Switch to set second mode");
-  }
-  else if (current_mode_ == SettingMinute){
-    Serial.println("Switch to set minute mode");
-  } 
-  else if (current_mode_ == SettingHour){
-    Serial.println("Switch to set hour mode");
-  }
-
-  last_logged_show_value_ = -1;
-  last_blink_millsecond_ = millis();
-}
-
-//閃爍當前設定的時間; 其他沒在設定的管子永遠正常顯示
-//按住 front 加數字時, 正在設定的管子保持常亮, 才看得清楚數字在跑
-void NixieTubeClock::BlinkTube(){ 
+void NixieTubeClock::AdjustTime() {
   Ds1302::DateTime now;
-  real_time_clock_.getDateTime(&now);
-  const bool holding_add = front_add_btn_.IsPressed();
-  const bool show = holding_add ||
-    (millis() - last_blink_millsecond_) % kBlinkPeriodMs < kBlinkOnMs;
-  if(!show){
-    if (current_mode_ == SettingSecond){
-      now.second = 255;
-    } else if (current_mode_ == SettingMinute){
-      now.minute = 255;
-    } else if (current_mode_ == SettingHour){
-      now.hour = 255;
-    }
-  }
-  SetTime(now);//ShiftRegister 會略過沒變的值, 每輪呼叫不會多送資料
-  if(holding_add){
-    last_blink_millsecond_ = millis();//放開後從「亮」開始閃
-  }
-  if(kVerboseLog && show){
-    // 診斷日誌: 設定中的管子實際被送了什麼數字 (數字有變才印), 拿來跟管子上看到的數字比對
-    const TimeUnit unit = UnitOfMode(current_mode_);
-    const uint8_t shown = FieldOf(now, unit);
-    if(shown != last_logged_show_value_){
-      last_logged_show_value_ = shown;
-      Serial.print(F("[SHOW] "));
-      Serial.print(kUnitNames[unit]);
-      Serial.print(F(" tube <- "));
-      Serial.print(shown);
-      Serial.print(F(", "));
-      Print595Line(time_registers_[unit].LastData());
-    }
-  }
-}
-
-void NixieTubeClock::AdjustTime(){
-  Ds1302::DateTime now;
-  real_time_clock_.getDateTime(&now);
-  const TimeUnit unit = UnitOfMode(current_mode_);
+  rtc_.getDateTime(&now);
+  const TimeUnit unit = SettingUnit();
   uint8_t& field = FieldOf(now, unit);
   const uint8_t before = field;
-  if (unit == Second) {
-    field = 0; // 秒只能歸零
-  } else if (unit == Minut) {
-    field = (field + 1) % 60; // 分鐘加一
+  if (unit == kSecond) {
+    field = 0;  // 秒只能歸零
+  } else if (unit == kMinute) {
+    field = (field + 1) % 60;
   } else {
-    field = (field + 1) % 24; // 時數加一
+    field = (field + 1) % 24;
   }
   const uint8_t target = field;
-  SetTimeUnit(unit, target);
-  time_adjusted_in_setting_ = true;
+  display_.ShowNumber(unit, target);
+  FieldOf(now_, unit) = target;  // 這一輪後面閃爍時用的也是新數字, 不會閃回舊的
+  time_adjusted_ = true;
 
   // 寫進 RTC 後馬上讀回來確認; 不一致就重寫, 日誌會留下紀錄
   uint8_t readback = 0;
   for (uint8_t attempt = 1; attempt <= kRtcWriteTries; ++attempt) {
-    real_time_clock_.setDateTime(&now);
+    rtc_.setDateTime(&now);
     Ds1302::DateTime check;
-    real_time_clock_.getDateTime(&check);
+    rtc_.getDateTime(&check);
     readback = FieldOf(check, unit);
     if (readback == target) {
       break;
@@ -831,7 +417,7 @@ void NixieTubeClock::AdjustTime(){
     Serial.print(F(", RTC readback="));
     Serial.print(readback);
     Serial.print(F(", "));
-    Print595Line(time_registers_[unit].LastData());
+    Print595Line(display_.LastData(unit));
   } else {
     // 短短一行, 按住每秒加 20 下時序列埠也來得及送
     Serial.print(kUnitNames[unit]);
@@ -840,12 +426,158 @@ void NixieTubeClock::AdjustTime(){
   }
 }
 
-void NixieTubeClock::SetTimeUnit(const TimeUnit unit, const int now){
-  time_registers_[unit].SetClockTime(now);
+// 閃爍正在設定的那組管子, 其他照常顯示; 按住 front 加數字時保持常亮, 才看得清楚數字在跑
+void NixieTubeClock::BlinkSettingTube() {
+  Ds1302::DateTime shown = now_;
+  const TimeUnit unit = SettingUnit();
+  const bool holding_add = buttons_.front().IsPressed();
+  const bool lit = holding_add || (millis() - blink_start_ms_) % kBlinkPeriodMs < kBlinkOnMs;
+  if (!lit) {
+    FieldOf(shown, unit) = Display::kBlank;
+  }
+  display_.ShowTime(shown);  // Display 會略過沒變的值, 每輪呼叫不會多送資料
+  if (holding_add) {
+    blink_start_ms_ = millis();  // 放開後從「亮」開始閃
+  }
+  if (kVerboseLog && lit) {
+    // 診斷日誌: 設定中的管子實際被送了什麼數字 (數字有變才印), 拿來跟管子上看到的數字比對
+    const uint8_t value = FieldOf(shown, unit);
+    if (value != last_logged_show_value_) {
+      last_logged_show_value_ = value;
+      Serial.print(F("[SHOW] "));
+      Serial.print(kUnitNames[unit]);
+      Serial.print(F(" tube <- "));
+      Serial.print(value);
+      Serial.print(F(", "));
+      Print595Line(display_.LastData(unit));
+    }
+  }
 }
 
-void NixieTubeClock::SetTime(const Ds1302::DateTime& now, uint8_t fade_ticks){
-  time_registers_[TimeUnit::Second].SetClockTime(now.second, fade_ticks);
-  time_registers_[TimeUnit::Minut].SetClockTime(now.minute, fade_ticks);
-  time_registers_[TimeUnit::Hour].SetClockTime(now.hour, fade_ticks);
+// 離開設定時間: 手動改過時間的話, 誤差補償從現在重新起算 (離開時才寫一次 EEPROM, 按住連加不會一直寫)
+void NixieTubeClock::FinishTimeSetting() {
+  if (!time_adjusted_) {
+    return;
+  }
+  time_adjusted_ = false;
+  Ds1302::DateTime now;
+  rtc_.getDateTime(&now);
+  DriftComp::OnManualSet(TimeSync::ToEpoch(now));
+}
+
+//******************************** 亮度 ********************************
+
+void NixieTubeClock::LoadBrightness() {
+  brightness_percent_ = EEPROM.read(kBrightnessEepromAddress);
+  if (brightness_percent_ < kBrightnessMin || brightness_percent_ > kBrightnessMax ||
+      brightness_percent_ % kBrightnessStep != 0) {
+    brightness_percent_ = kBrightnessDefault;  // 沒存過 (EEPROM 預設 0xFF) 或資料不對
+  }
+  ApplyBrightness(false);
+}
+
+// front 亮一階, back 暗一階, 到頭就停在那裡
+void NixieTubeClock::HandleBrightnessInput() {
+  int8_t step = 0;
+  if (buttons_.Has(ButtonInput::kFrontPress)) {
+    step = 1;
+  }
+  if (buttons_.Has(ButtonInput::kBackPress)) {
+    step = -1;
+  }
+  if (step == 0) {
+    return;
+  }
+  last_activity_ms_ = millis();
+  const int next = brightness_percent_ + step * kBrightnessStep;
+  if (next >= kBrightnessMin && next <= kBrightnessMax) {
+    brightness_percent_ = next;
+    ApplyBrightness(true);
+  }
+  ShowBrightness();
+}
+
+void NixieTubeClock::ApplyBrightness(bool save) {
+  TubeDriver::SetBrightness(brightness_percent_);
+  ColonLed::SetBrightness(brightness_percent_);
+  if (save) {
+    EEPROM.update(kBrightnessEepromAddress, brightness_percent_);  // 沒變就不寫
+  }
+  Serial.print(F("[BRIGHTNESS] "));
+  Serial.print(brightness_percent_);
+  Serial.println('%');
+}
+
+// 亮度顯示在右邊 3 支管子, 例如 "    80" / "   100", 其他不亮
+void NixieTubeClock::ShowBrightness() {
+  const uint8_t p = brightness_percent_;
+  const uint8_t digits[6] = {Display::kBlank, Display::kBlank, Display::kBlank,
+                             (uint8_t)(p >= 100 ? p / 100 : Display::kBlank),
+                             (uint8_t)(p / 10 % 10), (uint8_t)(p % 10)};
+  display_.ShowDigits(digits);
+}
+
+//******************************** RTC 與誤差補償 ********************************
+
+void NixieTubeClock::InitRtc() {
+  rtc_.init();
+  if (rtc_.isHalted()) {  // 電池沒電或第一次用: RTC 停著, 先給一個時間讓它跑起來
+    Serial.println(F("RTC is halted. Setting time..."));
+    rtc_was_reset_ = true;
+    Ds1302::DateTime dt = {.year = 24, .month = Ds1302::MONTH_OCT,
+      .day = 3, .hour = 2, .minute = 2, .second = 22, .dow = Ds1302::DOW_TUE};
+    rtc_.setDateTime(&dt);
+  }
+}
+
+// 寫進 RTC 後讀回確認 (秒數允許差 1, 寫完剛好跳秒), 不一致就重寫
+bool NixieTubeClock::WriteRtcVerified(const Ds1302::DateTime& time) {
+  Ds1302::DateTime writable = time;
+  for (uint8_t attempt = 1; attempt <= kRtcWriteTries; ++attempt) {
+    rtc_.setDateTime(&writable);
+    Ds1302::DateTime check;
+    rtc_.getDateTime(&check);
+    const long diff = TimeSync::DiffSeconds(check, time);
+    if (diff >= 0 && diff <= 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// 時鐘快/慢累積滿 1 秒就撥回來 (見 drift_comp.h); now 會更新成撥完的時間
+void NixieTubeClock::ApplyDriftCompensation(Ds1302::DateTime* now) {
+  const long due = DriftComp::DueSeconds(TimeSync::ToEpoch(*now));
+  if (due == 0) {
+    return;
+  }
+  Ds1302::DateTime fixed;
+  TimeSync::FromEpoch(TimeSync::ToEpoch(*now) - due, &fixed);
+  if (!WriteRtcVerified(fixed)) {
+    Serial.println(F("[DRIFT] RTC write failed"));
+    return;
+  }
+  DriftComp::MarkApplied(due);
+  *now = fixed;
+  Serial.print(F("[DRIFT] clock was "));
+  Serial.print(due > 0 ? F("fast") : F("slow"));
+  Serial.print(F(", moved "));
+  Serial.print(due > 0 ? F("back ") : F("forward "));
+  Serial.print(labs(due));
+  Serial.println(F(" s"));
+}
+
+// 印出目前的速率, 例如 "[DRIFT] rate +23150 ppb (+2.00 s/day)"
+void NixieTubeClock::PrintDriftRate() {
+  if (!DriftComp::HasRate()) {
+    Serial.println(F("[DRIFT] rate not measured yet (needs 2 USB syncs >= 3 days apart)"));
+    return;
+  }
+  const long ppb = DriftComp::RatePpb();
+  // 每天幾秒 = ppb * 86400 / 1e9; 印到小數 2 位 -> 以 0.01 秒為單位
+  const long centi = (long)(((int64_t)ppb * 86400LL + (ppb >= 0 ? 5000000LL : -5000000LL)) / 10000000LL);
+  char line[48];
+  snprintf_P(line, sizeof(line), PSTR("[DRIFT] rate %+ld ppb (%c%ld.%02ld s/day)"),
+             ppb, centi < 0 ? '-' : '+', labs(centi) / 100, labs(centi) % 100);
+  Serial.println(line);
 }

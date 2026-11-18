@@ -18,7 +18,7 @@ namespace TubeDriver {
 
 const uint8_t kRegisters = 3;
 
-// 設定 3 顆 595 的腳位 (順序 = ShiftRegister 的 id), 之後由中斷接手送資料
+// 設定 3 顆 595 的腳位 (順序 = display.h 的 TimeUnit: 秒 / 分 / 時), 之後由中斷接手送資料
 void Begin(const uint8_t latch_pins[kRegisters], const uint8_t clock_pins[kRegisters],
            const uint8_t data_pins[kRegisters]);
 
