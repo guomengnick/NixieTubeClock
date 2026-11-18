@@ -58,6 +58,7 @@ class NixieTubeClock{
   void BlinkTube();
   void AdjustTime();
   void SetTimeUnit(const TimeUnit unit, const int now);
+  bool WriteRtcVerified(const Ds1302::DateTime& time);
   // fade_ticks: 數字有變的管子淡入淡出的速度 (TubeDriver::kFadeNormal 等), 預設立刻切換
   void SetTime(const Ds1302::DateTime& now, uint8_t fade_ticks = TubeDriver::kFadeInstant);
 
@@ -66,6 +67,7 @@ class NixieTubeClock{
   void Setup();
   void CheckButtonStatus();
   void UpdateTimeIfNextSecond();
+  void HandleSerial();  // USB 對時
 };
 
 #endif // NIXIE_TUBE_CLOCK_INO

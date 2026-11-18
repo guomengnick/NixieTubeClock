@@ -4,6 +4,7 @@
 
 #include "colon_led.h"
 #include "fast_tick.h"
+#include "time_sync.h"
 #include "tube_driver.h"
 
 namespace{
@@ -66,6 +67,7 @@ namespace{
   // 9600 baud 一秒只能送約 960 個字, 打開時按住快速連加會被序列埠拖慢, 平常保持 false
   const bool kVerboseLog = false;
   const uint8_t kRtcWriteTries = 3;  // 寫 RTC 後讀回不一致就重寫, 最多寫這麼多次
+  const unsigned long kSyncDateShowMs = 1200;  // USB 對時成功: 先顯示日期 (YY MM DD) 這麼久, 再解碼成時間
 
   const char* const kUnitNames[3] = {"second", "minute", "hour"};
 
@@ -145,11 +147,12 @@ void NixieTubeClock::ShowDigits(const uint8_t digits[6]){
 }
 
 // 解碼秀 (說明見最上面的 kBootAnimation); 約 1.5 秒, 期間不讀按鈕
+// sweep_digits = nullptr 時跳過掃描, 直接解碼
 void NixieTubeClock::RunDecodeShow(const uint8_t sweep_digits[10], unsigned long sweep_step_ms){
   uint8_t digits[6];
 
   // 1. 掃描: 每支管子的 0~9 都亮過一次
-  for (uint8_t i = 0; i < 10; ++i) {
+  for (uint8_t i = 0; sweep_digits != nullptr && i < 10; ++i) {
     memset(digits, sweep_digits[i], sizeof(digits));
     ShowDigits(digits);
     delay(sweep_step_ms);
@@ -182,6 +185,71 @@ void NixieTubeClock::RunDecodeShow(const uint8_t sweep_digits[10], unsigned long
   }
 
   ShowCurrentTime();  // 動畫期間秒數可能已經跳了, 以 RTC 為準
+}
+
+// USB 對時 (指令格式見 time_sync.h, 電腦端用 tools/sync_time.bat)
+void NixieTubeClock::HandleSerial(){
+  Ds1302::DateTime received;
+  const TimeSync::Command command = TimeSync::Poll(&received);
+  if (command == TimeSync::kNone) {
+    return;
+  }
+  char text[20];
+  Ds1302::DateTime clock_time;
+  real_time_clock_.getDateTime(&clock_time);
+
+  if (command == TimeSync::kQuery) {
+    TimeSync::Format(clock_time, text, sizeof(text));
+    Serial.print("NOW ");
+    Serial.println(text);
+    return;
+  }
+  if (command == TimeSync::kBad) {
+    Serial.println("ERR format, expected: T2026-11-18 10:00:00");
+    return;
+  }
+
+  // 對時前時鐘快 (+) 或慢 (-) 了幾秒, 印出來就知道 DS1302 這段時間跑掉多少
+  const long drift = TimeSync::DiffSeconds(clock_time, received);
+  if (!WriteRtcVerified(received)) {
+    Serial.println("ERR RTC write failed");
+    return;
+  }
+  TimeSync::Format(received, text, sizeof(text));
+  Serial.print("OK ");
+  Serial.print(text);
+  Serial.print(" drift ");
+  if (drift > 0) {
+    Serial.print('+');
+  }
+  Serial.println(drift);
+
+  // 讓人看得出來剛對完時: 跳出設定模式/清管, 先亮日期, 再解碼鎖定成新時間
+  current_mode_ = ClockMode::Normal;
+  cleaning_ = false;
+  const uint8_t date[6] = {
+    (uint8_t)(received.year / 10), (uint8_t)(received.year % 10),
+    (uint8_t)(received.month / 10), (uint8_t)(received.month % 10),
+    (uint8_t)(received.day / 10), (uint8_t)(received.day % 10)};
+  ShowDigits(date);
+  delay(kSyncDateShowMs);
+  RunDecodeShow(nullptr, 0);
+  ScheduleNextClean();
+}
+
+// 寫進 RTC 後讀回確認 (秒數允許差 1, 寫完剛好跳秒), 不一致就重寫
+bool NixieTubeClock::WriteRtcVerified(const Ds1302::DateTime& time){
+  Ds1302::DateTime writable = time;
+  for (uint8_t attempt = 1; attempt <= kRtcWriteTries; ++attempt) {
+    real_time_clock_.setDateTime(&writable);
+    Ds1302::DateTime check;
+    real_time_clock_.getDateTime(&check);
+    const long diff = TimeSync::DiffSeconds(check, time);
+    if (diff >= 0 && diff <= 1) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // 每個 loop 只讀一次按鈕，所有邏輯都用同一份防抖後的狀態，且不使用 delay()
