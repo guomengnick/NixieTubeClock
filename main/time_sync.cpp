@@ -111,6 +111,32 @@ Command Poll(Ds1302::DateTime* out) {
   return kNone;
 }
 
+uint32_t ToEpoch(const Ds1302::DateTime& t) {
+  return DaysSince2000(t) * 86400UL + t.hour * 3600UL + t.minute * 60UL + t.second;
+}
+
+void FromEpoch(uint32_t epoch, Ds1302::DateTime* out) {
+  uint32_t days = epoch / 86400UL;
+  const uint32_t rest = epoch % 86400UL;
+  uint16_t year = 2000;
+  while (days >= (IsLeap(year) ? 366U : 365U)) {
+    days -= IsLeap(year) ? 366 : 365;
+    ++year;
+  }
+  uint8_t month = 1;
+  while (days >= DaysInMonth(year, month)) {
+    days -= DaysInMonth(year, month);
+    ++month;
+  }
+  out->year = year - 2000;
+  out->month = month;
+  out->day = days + 1;
+  out->hour = rest / 3600;
+  out->minute = rest / 60 % 60;
+  out->second = rest % 60;
+  out->dow = DayOfWeek(year, month, out->day);
+}
+
 long DiffSeconds(const Ds1302::DateTime& a, const Ds1302::DateTime& b) {
   const long days = DaysSince2000(a) - DaysSince2000(b);
   if (days > 20000 || days < -20000) {

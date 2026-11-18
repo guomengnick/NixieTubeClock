@@ -5,7 +5,7 @@
 #   1. 找到時鐘的 COM 埠 (CH340), 打開後一直送 "?", 等時鐘回 "NOW ..."
 #      (打開 COM 埠可能讓 Nano 重開機, 要等開機動畫跑完才會回)
 #   2. 等到下一個整秒, 送出 "T2026-11-18 10:00:00"
-#   3. 時鐘回 "OK ... drift -5", 印出對時前時鐘快/慢了幾秒
+#   3. 時鐘回 "OK ... drift -5 comp ... rate ...", 印出對時前時鐘快/慢了幾秒和誤差補償的狀態
 param(
     [string]$Port
 )
@@ -100,7 +100,11 @@ try {
         exit 1
     }
 
-    $drift = [long]($result.Split(' ')[-1])
+    if ($result -notmatch 'drift ([+-]?\d+)') {
+        Write-Host "看不懂時鐘的回覆: $result" -ForegroundColor Red
+        exit 1
+    }
+    $drift = [long]$Matches[1]
     Write-Host ''
     Write-Host "對時成功: $($target.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Green
     if ($drift -eq 0) {
@@ -111,6 +115,29 @@ try {
         Write-Host "時鐘原本快了 $drift 秒。"
     } else {
         Write-Host "時鐘原本慢了 $(-$drift) 秒。"
+    }
+
+    # 誤差補償的狀態 (舊韌體沒有這段, 就不印)
+    if ($result -match 'comp ([+-]?\d+) raw ([+-]?\d+) rate (\S+) learn (\d+)') {
+        $comp = [long]$Matches[1]
+        $raw = [long]$Matches[2]
+        $rate = $Matches[3]
+        $learnDays = [math]::Round([long]$Matches[4] / 86400.0, 1)
+        if ($comp -ne 0) {
+            $how = if ($comp -gt 0) { "撥慢了 $comp 秒" } else { "撥快了 $(-$comp) 秒" }
+            $rawText = if ($raw -ge 0) { "快 $raw 秒" } else { "慢 $(-$raw) 秒" }
+            Write-Host "這段期間時鐘已經自動$how; 沒有補償的話會$rawText。"
+        }
+        if ($rate -eq 'none') {
+            Write-Host "誤差補償: 還在量速率 (這一輪已累積 $learnDays 天, 要 3 天以上; 下次對時隔 3 天以上就會開始自動補償)。" -ForegroundColor Yellow
+        } else {
+            $secPerDay = [long]$rate * 86400 / 1e9
+            $dir = if ($secPerDay -ge 0) { '快' } else { '慢' }
+            $abs = [math]::Abs($secPerDay)
+            $text = '{0:0.00}' -f $abs
+            Write-Host "誤差補償: 這顆 RTC 每天$dir $text 秒 ($('{0:0.0}' -f ([long]$rate / 1000.0)) ppm), 時鐘會自動修正。" -ForegroundColor Cyan
+            Write-Host "  (這一輪已累積 $learnDays 天, 越久越準; 滿 30 天重新量一次)"
+        }
     }
 } finally {
     $serial.Close()

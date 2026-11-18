@@ -36,7 +36,9 @@ class NixieTubeClock{
   unsigned long last_repeat_millsecond_ = 0;  // 按住連加: 上一次 +1 的時間
   unsigned long repeat_interval_ms_ = 0;      // 按住連加: 距離下一次 +1 的間隔, 越按越短
   unsigned long breath_start_millsecond_ = 0;  // 冒號呼吸燈: 這次呼吸開始的時間
-  int last_logged_show_value_ = -1;  // 診斷日誌: 設定中的管子上次印出的數字, 變了才再印
+  int last_logged_show_value_ = -1;
+  bool time_adjusted_in_setting_ = false;  // 這次設定模式有改到時間, 離開時通知誤差補償
+  bool rtc_was_reset_ = false;             // 開機時 RTC 停著 (電池沒電), 被設回預設時間  // 診斷日誌: 設定中的管子上次印出的數字, 變了才再印
 
   ClockMode current_mode_;
   
@@ -59,6 +61,8 @@ class NixieTubeClock{
   void AdjustTime();
   void SetTimeUnit(const TimeUnit unit, const int now);
   bool WriteRtcVerified(const Ds1302::DateTime& time);
+  void ApplyDriftCompensation(Ds1302::DateTime* now);
+  void PrintDriftRate();
   // fade_ticks: 數字有變的管子淡入淡出的速度 (TubeDriver::kFadeNormal 等), 預設立刻切換
   void SetTime(const Ds1302::DateTime& now, uint8_t fade_ticks = TubeDriver::kFadeInstant);
 

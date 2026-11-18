@@ -23,6 +23,10 @@ Command Poll(Ds1302::DateTime* out);
 // a 比 b 晚幾秒 (差太多時回傳 +-999999999, 只拿來顯示誤差)
 long DiffSeconds(const Ds1302::DateTime& a, const Ds1302::DateTime& b);
 
+// 從 2000-01-01 00:00:00 起算的秒數 (誤差補償用), 和它的反轉換
+uint32_t ToEpoch(const Ds1302::DateTime& t);
+void FromEpoch(uint32_t epoch, Ds1302::DateTime* out);
+
 // 印成 "2026-11-18 10:00:00"
 void Format(const Ds1302::DateTime& t, char* buf, size_t size);
 

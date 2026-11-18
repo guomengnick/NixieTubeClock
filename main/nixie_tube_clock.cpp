@@ -3,6 +3,7 @@
 #include "nixie_tube_clock.h"
 
 #include "colon_led.h"
+#include "drift_comp.h"
 #include "fast_tick.h"
 #include "time_sync.h"
 #include "tube_driver.h"
@@ -67,7 +68,10 @@ namespace{
   // 9600 baud 一秒只能送約 960 個字, 打開時按住快速連加會被序列埠拖慢, 平常保持 false
   const bool kVerboseLog = false;
   const uint8_t kRtcWriteTries = 3;  // 寫 RTC 後讀回不一致就重寫, 最多寫這麼多次
-  const unsigned long kSyncDateShowMs = 1200;  // USB 對時成功: 先顯示日期 (YY MM DD) 這麼久, 再解碼成時間
+  const unsigned long kSyncDateShowMs = 1200;
+  // 誤差補償 (見 drift_comp.h): 每分鐘的這一秒檢查要不要撥 1 秒; 避開 59->00, 不會牽動分鐘
+  const bool kDriftCompensation = true;
+  const uint8_t kDriftFixSecond = 30;  // USB 對時成功: 先顯示日期 (YY MM DD) 這麼久, 再解碼成時間
 
   const char* const kUnitNames[3] = {"second", "minute", "hour"};
 
@@ -128,6 +132,26 @@ void NixieTubeClock::Setup(){
     ColonLed::Begin(led_output_pin_);
   }
   FastTick::Begin();
+
+  DriftComp::Begin();
+  if (rtc_was_reset_) {
+    DriftComp::Forget();
+  }
+  PrintDriftRate();
+  if (kDriftCompensation) {
+    // 關機期間 RTC 靠電池照樣跑快/跑慢, 開機時一次補回來。
+    // 先等到跳秒那一刻再寫, 不會吃掉這一秒已經走掉的零頭
+    Ds1302::DateTime now;
+    real_time_clock_.getDateTime(&now);
+    if (DriftComp::DueSeconds(TimeSync::ToEpoch(now)) != 0) {
+      const uint8_t second = now.second;
+      const unsigned long wait_start = millis();
+      while (now.second == second && millis() - wait_start < 1100) {
+        real_time_clock_.getDateTime(&now);
+      }
+      ApplyDriftCompensation(&now);
+    }
+  }
 
   if (kBootAnimation) {
     Serial.println("[BOOT]");
@@ -215,17 +239,33 @@ void NixieTubeClock::HandleSerial(){
     Serial.println("ERR RTC write failed");
     return;
   }
+  const DriftComp::SyncInfo info = DriftComp::OnSync(TimeSync::ToEpoch(received), drift);
+  // 一行給電腦端腳本解析: OK <時間> drift <秒> comp <已自動修正秒> raw <沒補償會差幾秒>
+  //                       rate <ppb|none> learn <這輪學了幾秒>
   TimeSync::Format(received, text, sizeof(text));
-  Serial.print("OK ");
+  Serial.print(F("OK "));
   Serial.print(text);
-  Serial.print(" drift ");
-  if (drift > 0) {
-    Serial.print('+');
+  Serial.print(F(" drift "));
+  Serial.print(drift);
+  Serial.print(F(" comp "));
+  Serial.print(info.applied);
+  Serial.print(F(" raw "));
+  Serial.print(info.raw_drift);
+  Serial.print(F(" rate "));
+  if (DriftComp::HasRate()) {
+    Serial.print(DriftComp::RatePpb());
+  } else {
+    Serial.print(F("none"));
   }
-  Serial.println(drift);
+  Serial.print(F(" learn "));
+  Serial.println(info.learn_seconds);
+  if (info.rate_updated) {
+    PrintDriftRate();
+  }
 
   // 讓人看得出來剛對完時: 跳出設定模式/清管, 先亮日期, 再解碼鎖定成新時間
   current_mode_ = ClockMode::Normal;
+  time_adjusted_in_setting_ = false;  // 已經用 USB 對準了, 不用再當手動設定
   cleaning_ = false;
   const uint8_t date[6] = {
     (uint8_t)(received.year / 10), (uint8_t)(received.year % 10),
@@ -250,6 +290,43 @@ bool NixieTubeClock::WriteRtcVerified(const Ds1302::DateTime& time){
     }
   }
   return false;
+}
+
+// 時鐘快/慢累積滿 1 秒就撥回來 (見 drift_comp.h); now 會更新成撥完的時間
+void NixieTubeClock::ApplyDriftCompensation(Ds1302::DateTime* now){
+  const long due = DriftComp::DueSeconds(TimeSync::ToEpoch(*now));
+  if (due == 0) {
+    return;
+  }
+  Ds1302::DateTime fixed;
+  TimeSync::FromEpoch(TimeSync::ToEpoch(*now) - due, &fixed);
+  if (!WriteRtcVerified(fixed)) {
+    Serial.println(F("[DRIFT] RTC write failed"));
+    return;
+  }
+  DriftComp::MarkApplied(due);
+  *now = fixed;
+  Serial.print(F("[DRIFT] clock was "));
+  Serial.print(due > 0 ? F("fast") : F("slow"));
+  Serial.print(F(", moved "));
+  Serial.print(due > 0 ? F("back ") : F("forward "));
+  Serial.print(labs(due));
+  Serial.println(F(" s"));
+}
+
+// 印出目前的速率, 例如 "[DRIFT] rate +23150 ppb (+2.00 s/day)"
+void NixieTubeClock::PrintDriftRate(){
+  if (!DriftComp::HasRate()) {
+    Serial.println(F("[DRIFT] rate not measured yet (needs 2 USB syncs >= 3 days apart)"));
+    return;
+  }
+  const long ppb = DriftComp::RatePpb();
+  // 每天幾秒 = ppb * 86400 / 1e9; 印到小數 2 位 -> 以 0.01 秒為單位
+  const long centi = (long)(((int64_t)ppb * 86400LL + (ppb >= 0 ? 5000000LL : -5000000LL)) / 10000000LL);
+  char line[48];
+  snprintf(line, sizeof(line), "[DRIFT] rate %+ld ppb (%c%ld.%02ld s/day)",
+           ppb, centi < 0 ? '-' : '+', labs(centi) / 100, labs(centi) % 100);
+  Serial.println(line);
 }
 
 // 每個 loop 只讀一次按鈕，所有邏輯都用同一份防抖後的狀態，且不使用 delay()
@@ -294,6 +371,9 @@ void NixieTubeClock::UpdateTimeIfNextSecond(){
     digitalWrite(led_output_pin_, current_led_turn_on_ ? HIGH : LOW);  // 冒號 LED 每秒亮暗切換
     current_led_turn_on_ = !current_led_turn_on_;
   }
+  if (kDriftCompensation && now.second == kDriftFixSecond && current_mode_ == ClockMode::Normal) {
+    ApplyDriftCompensation(&now);  // 剛跳秒就撥, 不會吃掉零頭
+  }
   last_second_ = now.second;
 
   // 每秒一行, 補零對齊: "10:00:06", 設定/清理中在後面標註狀態 (原本另外印 ON/OFF 兩行很雜)
@@ -326,6 +406,7 @@ void NixieTubeClock::SetRealTimeClock(){
   real_time_clock_.init();
   if (real_time_clock_.isHalted()){// if is halted, set a date-time
     Serial.println("RTC is halted. Setting time...");
+    rtc_was_reset_ = true;
     Ds1302::DateTime dt = {.year = 24, .month = Ds1302::MONTH_OCT,
       .day = 3,.hour = 2, .minute = 2, .second = 22, .dow = Ds1302::DOW_TUE};
     real_time_clock_.setDateTime(&dt);
@@ -356,7 +437,7 @@ void NixieTubeClock::ScheduleNextClean(){
   next_clean_after_seconds_ = random(kAutoCleanMinSeconds, kAutoCleanMaxSeconds + 1);
   Serial.print("[CLEAN] next in ");
   Serial.print(next_clean_after_seconds_);
-  Serial.println(" s");
+  Serial.println(F(" s"));
 }
 
 void NixieTubeClock::AutoCleanTube(){
@@ -429,6 +510,13 @@ void NixieTubeClock::ProcessSettingTime(){
   if(millis() - last_setting_activity_millsecond_ > kSettingTimeoutMs){
     current_mode_ = ClockMode::Normal;
     Serial.println("Set back to normal");
+    if (time_adjusted_in_setting_) {
+      // 手動改過時間: 補償從現在重新起算 (離開時才寫一次 EEPROM, 按住連加不會一直寫)
+      time_adjusted_in_setting_ = false;
+      Ds1302::DateTime now;
+      real_time_clock_.getDateTime(&now);
+      DriftComp::OnManualSet(TimeSync::ToEpoch(now));
+    }
     ShowCurrentTime();
     return;
   }
@@ -546,6 +634,7 @@ void NixieTubeClock::AdjustTime(){
   }
   const uint8_t target = field;
   SetTimeUnit(unit, target);
+  time_adjusted_in_setting_ = true;
 
   // 寫進 RTC 後馬上讀回來確認; 不一致就重寫, 日誌會留下紀錄
   uint8_t readback = 0;
