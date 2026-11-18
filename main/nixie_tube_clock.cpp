@@ -19,14 +19,14 @@ namespace{
   const unsigned long kSettingTimeoutMs = 8000;     // 設定模式 8 秒沒按鍵就回到正常模式
 
   // 亮度設定: 正常模式下長按 front 2 秒進入, 管子顯示目前亮度 (例如 "80");
-  // front 亮一階、back 暗一階, 5 秒沒按就回到時間。每次調整馬上存進 EEPROM
+  // front 亮一階 (5%)、back 暗一階, 5 秒沒按就回到時間。每次調整馬上存進 EEPROM
   // 亮度是用「縮短亮的時間」做的 (見 tube_driver.h), 損耗大致跟亮度成正比: 80% 約少 20% 損耗
   const unsigned long kEnterBrightnessHoldMs = 2000;
   const unsigned long kBrightnessTimeoutMs = 5000;
   const uint8_t kBrightnessDefault = 80;  // 第一次開機的亮度: 肉眼幾乎看不出比 100% 暗
-  const uint8_t kBrightnessMin = 30;      // 再暗白天會看不清楚, 而且亮的時間太短輝光不穩
+  const uint8_t kBrightnessMin = 20;      // 每輪亮 1.5ms; 再暗白天會看不清楚
   const uint8_t kBrightnessMax = 100;
-  const uint8_t kBrightnessStep = 10;
+  const uint8_t kBrightnessStep = 5;       // = TubeDriver 一格, 剛好不用四捨五入
   const int kBrightnessEepromAddress = 64;  // 0 開始的那段給 drift_comp 用
 
   // 設定模式按住 front 連續加 (跟鍵盤按住連打一樣): 按下先 +1, 按住 0.5 秒開始連加,
