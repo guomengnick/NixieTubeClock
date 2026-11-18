@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <EEPROM.h>
 
 #include "nixie_tube_clock.h"
 
@@ -16,6 +17,17 @@ namespace{
   const unsigned long kEnterSettingHoldMs = 2000;   // 長按 back 2 秒進入設定模式
   const unsigned long kManualCleanHoldMs = 1000;    // 兩顆一起長按 1 秒清理管子
   const unsigned long kSettingTimeoutMs = 8000;     // 設定模式 8 秒沒按鍵就回到正常模式
+
+  // 亮度設定: 正常模式下長按 front 2 秒進入, 管子顯示目前亮度 (例如 "80");
+  // front 亮一階、back 暗一階, 5 秒沒按就回到時間。每次調整馬上存進 EEPROM
+  // 亮度是用「縮短亮的時間」做的 (見 tube_driver.h), 損耗大致跟亮度成正比: 80% 約少 20% 損耗
+  const unsigned long kEnterBrightnessHoldMs = 2000;
+  const unsigned long kBrightnessTimeoutMs = 5000;
+  const uint8_t kBrightnessDefault = 80;  // 第一次開機的亮度: 肉眼幾乎看不出比 100% 暗
+  const uint8_t kBrightnessMin = 30;      // 再暗白天會看不清楚, 而且亮的時間太短輝光不穩
+  const uint8_t kBrightnessMax = 100;
+  const uint8_t kBrightnessStep = 10;
+  const int kBrightnessEepromAddress = 64;  // 0 開始的那段給 drift_comp 用
 
   // 設定模式按住 front 連續加 (跟鍵盤按住連打一樣): 按下先 +1, 按住 0.5 秒開始連加,
   // 一開始每 200ms 加 1, 之後每加一次間隔縮短 15%, 按住約 1.3 秒後到最快每 50ms 加 1 (每秒 20 下), 放開就停
@@ -133,6 +145,13 @@ void NixieTubeClock::Setup(){
   }
   FastTick::Begin();
 
+  brightness_percent_ = EEPROM.read(kBrightnessEepromAddress);
+  if (brightness_percent_ < kBrightnessMin || brightness_percent_ > kBrightnessMax ||
+      brightness_percent_ % kBrightnessStep != 0) {
+    brightness_percent_ = kBrightnessDefault;  // 沒存過 (EEPROM 預設 0xFF) 或資料不對
+  }
+  ApplyBrightness(false);
+
   DriftComp::Begin();
   if (rtc_was_reset_) {
     DriftComp::Forget();
@@ -160,13 +179,11 @@ void NixieTubeClock::Setup(){
   ScheduleNextClean();
 }
 
-// 6 支管子各自的數字 (由左到右: 時十 時個 分十 分個 秒十 秒個); 255 = 該支不亮
+// 6 支管子各自的數字 (由左到右: 時十 時個 分十 分個 秒十 秒個); 大於 9 (例如 255) = 該支不亮
 void NixieTubeClock::ShowDigits(const uint8_t digits[6]){
   const TimeUnit units[3] = {Hour, Minut, Second};
   for (uint8_t pair = 0; pair < 3; ++pair) {
-    const uint8_t tens = digits[pair * 2];
-    const uint8_t ones = digits[pair * 2 + 1];
-    time_registers_[units[pair]].SetClockTime(tens > 9 || ones > 9 ? 255 : tens * 10 + ones);
+    time_registers_[units[pair]].SetDigits(digits[pair * 2], digits[pair * 2 + 1]);
   }
 }
 
@@ -340,6 +357,11 @@ void NixieTubeClock::CheckButtonStatus(){
   } else if (front_add_btn_.IsPressed()) {
     back_btn_used_in_combo_ = true;
   }
+  if (!front_add_btn_.IsPressed()) {
+    front_btn_used_in_combo_ = false;
+  } else if (back_set_btn_.IsPressed()) {
+    front_btn_used_in_combo_ = true;
+  }
 
   ProcessCleanTube();
   ProcessSettingTime();
@@ -386,6 +408,8 @@ void NixieTubeClock::UpdateTimeIfNextSecond(){
     tag = "  [set minute]";
   } else if (current_mode_ == SettingHour) {
     tag = "  [set hour]";
+  } else if (current_mode_ == SettingBrightness) {
+    tag = "  [set brightness]";
   }
   char line[28];
   snprintf(line, sizeof(line), "%02u:%02u:%02u%s", now.hour, now.minute, now.second, tag);
@@ -499,6 +523,11 @@ void NixieTubeClock::ShowCurrentTime(){
 void NixieTubeClock::ProcessSettingTime(){
   if(current_mode_ == ClockMode::Normal){
     CheckIfExecuteSettingTimeMode();
+    CheckIfExecuteBrightnessMode();
+    return;
+  }
+  if(current_mode_ == ClockMode::SettingBrightness){
+    ProcessBrightnessSetting();
     return;
   }
 
@@ -538,9 +567,69 @@ void NixieTubeClock::CheckIfExecuteSettingTimeMode(){
   }
 }
 
+void NixieTubeClock::CheckIfExecuteBrightnessMode(){
+  if (current_mode_ != ClockMode::Normal || !front_add_btn_.IsPressed() ||
+      back_set_btn_.IsPressed() || front_btn_used_in_combo_){
+    return;
+  }
+  if (front_add_btn_.PressedDurationMs() > kEnterBrightnessHoldMs){
+    Serial.println(F("Entering brightness mode"));
+    current_mode_ = ClockMode::SettingBrightness;
+    front_btn_used_in_combo_ = true;  // 這次按住已經用掉了, 放開前不會再觸發一次
+    last_setting_activity_millsecond_ = millis();
+    ShowBrightness();
+  }
+}
+
+// 亮度設定: front 亮一階, back 暗一階, 到頭就停在那裡
+void NixieTubeClock::ProcessBrightnessSetting(){
+  int8_t step = 0;
+  if (front_add_btn_.WasPressed()) {
+    step = 1;
+  }
+  if (back_set_btn_.WasPressed()) {
+    step = -1;
+    back_btn_used_in_combo_ = true;  // 放開前不會因為按太久誤進時間設定
+  }
+  if (step != 0) {
+    last_setting_activity_millsecond_ = millis();
+    const int next = brightness_percent_ + step * kBrightnessStep;
+    if (next >= kBrightnessMin && next <= kBrightnessMax) {
+      brightness_percent_ = next;
+      ApplyBrightness(true);
+    }
+    ShowBrightness();
+  }
+  if (millis() - last_setting_activity_millsecond_ > kBrightnessTimeoutMs) {
+    current_mode_ = ClockMode::Normal;
+    Serial.println(F("Brightness set, back to normal"));
+    ShowCurrentTime();
+  }
+}
+
+void NixieTubeClock::ApplyBrightness(bool save){
+  TubeDriver::SetBrightness(brightness_percent_);
+  ColonLed::SetBrightness(brightness_percent_);
+  if (save) {
+    EEPROM.update(kBrightnessEepromAddress, brightness_percent_);  // 沒變就不寫
+  }
+  Serial.print(F("[BRIGHTNESS] "));
+  Serial.print(brightness_percent_);
+  Serial.println('%');
+}
+
+// 亮度顯示在右邊 3 支管子, 例如 "    80" / "   100", 其他不亮
+void NixieTubeClock::ShowBrightness(){
+  const uint8_t p = brightness_percent_;
+  const uint8_t digits[6] = {255, 255, 255,
+                             (uint8_t)(p >= 100 ? p / 100 : 255), (uint8_t)(p / 10 % 10), (uint8_t)(p % 10)};
+  ShowDigits(digits);
+}
+
 // 設定模式下的 front 按鍵: 按一下 +1, 按住越久加越快, 放開就停
 void NixieTubeClock::ProcessAddButtonInSetting(){
   if(front_add_btn_.WasPressed()){
+    front_btn_used_in_combo_ = true;  // 設定時間用掉的按住, 回到正常模式後不會誤進亮度設定
     last_setting_activity_millsecond_ = millis();//有按按鍵,更新上次按下的時間
     AdjustTime();
     last_repeat_millsecond_ = millis();

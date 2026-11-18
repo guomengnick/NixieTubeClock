@@ -22,6 +22,9 @@ void Tick();
 // phase_ms 0 ~ kBreathPeriodMs-1, 前半段吸氣 (變亮), 後半段吐氣 (變暗)
 void Update(unsigned long phase_ms);
 
+// 最亮時的亮度 (%), 跟著管子的亮度一起調, 看起來才協調
+void SetBrightness(uint8_t percent);
+
 const unsigned long kBreathPeriodMs = 2000;  // 一次呼吸 2 秒, 跟原本「亮 1 秒暗 1 秒」同節奏
 
 }  // namespace ColonLed

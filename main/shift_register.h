@@ -33,6 +33,11 @@ class ShiftRegister {
     }
     SendBinaryData(binary_time, fade_ticks);
   }
+  // 十位數、個位數分開給; 大於 9 = 那一支不亮
+  void SetDigits(uint8_t tens, uint8_t ones, uint8_t fade_ticks = TubeDriver::kFadeInstant) {
+    SendBinaryData((DecimalToBinary(ones > 9 ? 10 : ones) << 4) | DecimalToBinary(tens > 9 ? 10 : tens),
+                   fade_ticks);
+  }
   // 最後一次要求顯示的 byte (Q7..Q0), 給診斷日誌用; 還沒送過是 -1
   int LastData() const { return last_time_; }
   int latch_pin() const { return latch_pin_; }

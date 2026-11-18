@@ -11,6 +11,7 @@ namespace {
   uint8_t g_mask = 0;
   volatile uint8_t g_duty = 0;          // 0 = 全暗, kLevels = 全亮
   uint8_t g_curve[kCurveSteps + 1];     // 吸氣曲線: 位置 0..kCurveSteps -> 亮度 0..kLevels
+  uint8_t g_percent = 100;              // 整體亮度
 }
 
 namespace ColonLed {
@@ -48,7 +49,11 @@ void Update(unsigned long phase_ms) {
   phase_ms %= kBreathPeriodMs;
   // 前半段往上爬, 後半段原路下降
   const unsigned long pos = phase_ms < half ? phase_ms : kBreathPeriodMs - phase_ms;
-  g_duty = g_curve[pos * kCurveSteps / half];  // 單一 byte, 寫入本來就是原子的
+  g_duty = (uint16_t)g_curve[pos * kCurveSteps / half] * g_percent / 100;  // 單一 byte, 寫入本來就是原子的
+}
+
+void SetBrightness(uint8_t percent) {
+  g_percent = min(percent, (uint8_t)100);
 }
 
 }  // namespace ColonLed

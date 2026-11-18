@@ -8,7 +8,7 @@
 #include "tube_cleaner.h"
 
 
-enum ClockMode { Normal, SettingSecond, SettingMinute, SettingHour };
+enum ClockMode { Normal, SettingSecond, SettingMinute, SettingHour, SettingBrightness };
 enum TimeUnit {Second, Minut, Hour};
 
 class NixieTubeClock{
@@ -21,7 +21,9 @@ class NixieTubeClock{
   //*************************************按鈕*****************************
   Button back_set_btn_;   // A1: 長按3秒進入設定模式 / 設定模式下切換時分秒
   Button front_add_btn_;  // A2: 設定模式下加一
-  bool back_btn_used_in_combo_ = false;   // 兩顆一起按過(清理管子)，放開前不進入設定模式
+  bool back_btn_used_in_combo_ = false;   // 兩顆一起按過(清理管子)或已經拿來做別的事，放開前不進入設定模式
+  bool front_btn_used_in_combo_ = false;  // 同上, 放開前不進入亮度設定
+  uint8_t brightness_percent_ = 0;        // 管子亮度 (%), 開機從 EEPROM 讀
   bool manual_clean_triggered_ = false;   // 同時長按只觸發一次清理
   unsigned long last_setting_activity_millsecond_ = 0;  // 設定模式下最後一次按鍵時間
   //*************************************清理管子*************************
@@ -55,6 +57,10 @@ class NixieTubeClock{
   void ProcessSettingTime();
   void ProcessCleanTube();
   void CheckIfExecuteSettingTimeMode();
+  void CheckIfExecuteBrightnessMode();
+  void ProcessBrightnessSetting();
+  void ApplyBrightness(bool save);
+  void ShowBrightness();
   void SwitchSettingTimeUnit();
   void ProcessAddButtonInSetting();
   void BlinkTube();

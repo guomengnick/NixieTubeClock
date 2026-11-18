@@ -1,8 +1,10 @@
 #include "tube_driver.h"
 
 namespace {
-  // 中斷每秒 16000 次, 3 顆 595 輪流處理 (每 8 次裡的前 3 次), 每顆每秒更新 2000 次
-  const uint8_t kSlots = 16;          // 一個切換週期 16 格 = 每秒 125 輪, 看不出閃爍
+  // 中斷每秒 16000 次, 3 顆 595 輪流處理 (每 6 次裡的前 3 次), 每顆每秒更新約 2667 次
+  const uint8_t kTickCycle = 6;
+  const uint8_t kSlots = 20;          // 一個切換週期 20 格 = 每秒 133 輪, 看不出閃爍; 亮度可以 5% 一階
+  const uint8_t kBlank = 0xFF;        // 兩支管子都不亮
 
   struct Register {
     volatile uint8_t* latch_port;
@@ -22,6 +24,7 @@ namespace {
 
   Register g_registers[TubeDriver::kRegisters];
   bool g_running = false;
+  volatile uint8_t g_lit_slots = kSlots;  // 每個週期前幾格亮 (亮度)
 
   // 中斷裡直接寫暫存器送 8 個 bit (約 6 微秒); 用 shiftOut()/digitalWrite() 要 100 多微秒, 太慢
   void Shift(Register& r, uint8_t value) {
@@ -65,6 +68,11 @@ void Begin(const uint8_t latch_pins[kRegisters], const uint8_t clock_pins[kRegis
 
 bool Running() { return g_running; }
 
+void SetBrightness(uint8_t percent) {
+  uint8_t slots = ((uint16_t)percent * kSlots + 50) / 100;
+  g_lit_slots = constrain(slots, 1, kSlots);  // 單一 byte, 寫入是原子的
+}
+
 void Show(uint8_t id, uint8_t data, uint8_t ticks_per_level) {
   if (id >= kRegisters) {
     return;
@@ -87,7 +95,7 @@ void Show(uint8_t id, uint8_t data, uint8_t ticks_per_level) {
 
 void Tick() {
   static uint8_t tick = 0;
-  tick = (tick + 1) & 7;
+  tick = tick + 1 >= kTickCycle ? 0 : tick + 1;
   if (!g_running || tick >= kRegisters) {
     return;
   }
@@ -96,8 +104,13 @@ void Tick() {
     r.level_ticks = 0;
     ++r.level;
   }
-  r.slot = (r.slot + 1) & (kSlots - 1);
-  const uint8_t out = r.slot < r.level ? r.to : r.from;
+  r.slot = r.slot + 1 >= kSlots ? 0 : r.slot + 1;
+  // 前 lit 格亮: 其中 level/kSlots 的比例送新資料, 其餘送舊資料; 後面的格子不亮 (調亮度)
+  const uint8_t lit = g_lit_slots;
+  uint8_t out = kBlank;
+  if (r.slot < lit) {
+    out = (uint16_t)r.slot * kSlots < (uint16_t)r.level * lit ? r.to : r.from;
+  }
   if (out != r.sent) {
     Shift(r, out);
     r.sent = out;
