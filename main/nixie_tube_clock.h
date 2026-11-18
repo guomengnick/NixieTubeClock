@@ -17,8 +17,6 @@ class NixieTubeClock{
   friend class TubeCleaner;
 
   TubeCleaner cleaner_;
-  unsigned long last_clean_tube_time_millsecond_;
-  unsigned long target_time_seconds_ = 0;  // 目標時間，單位為秒
 
   //*************************************按鈕*****************************
   Button back_set_btn_;   // A1: 長按3秒進入設定模式 / 設定模式下切換時分秒
@@ -40,10 +38,8 @@ class NixieTubeClock{
 
   ClockMode current_mode_;
   
-  void RandomizeNextCleaningTime();
-  void RunBootAnimation();
+  void RunDecodeShow(const uint8_t sweep_digits[10], unsigned long sweep_step_ms);
   void ShowDigits(const uint8_t digits[6]);
-  void AutoCleanTube();
   void StartCleanTube();
   void UpdateCleanTube();
   void ShowCleanStep();
@@ -58,8 +54,8 @@ class NixieTubeClock{
   void BlinkTube();
   void AdjustTime();
   void SetTimeUnit(const TimeUnit unit, const int now);
-  // fade = true: 數字有變的管子淡入淡出 (正常走時用); 設定模式閃爍、清管動畫等用 false 立刻切換
-  void SetTime(const Ds1302::DateTime& now, bool fade = false);
+  // fade_ticks: 數字有變的管子淡入淡出的速度 (TubeDriver::kFadeNormal 等), 預設立刻切換
+  void SetTime(const Ds1302::DateTime& now, uint8_t fade_ticks = TubeDriver::kFadeInstant);
 
  public:
   NixieTubeClock();

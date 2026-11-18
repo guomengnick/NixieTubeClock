@@ -19,8 +19,8 @@ class ShiftRegister {
   }
 
   // 设置时钟显示，接收一个整数，左边的輝光管显示十位数，右边的輝光管显示个位数
-  // fade = true: 從目前的數字淡入 (需要 TubeDriver 已經啟動, 否則直接切換)
-  void SetClockTime(int time, bool fade = false) {
+  // fade_ticks: 淡入速度 (TubeDriver::kFadeNormal 等), 預設立刻切換; TubeDriver 還沒啟動時一律直接切換
+  void SetClockTime(int time, uint8_t fade_ticks = TubeDriver::kFadeInstant) {
     int binary_time;
     if(time == 255){//個位數、十位數都on 代表不顯示
       binary_time = 255;
@@ -31,7 +31,7 @@ class ShiftRegister {
       binary_time = 
           (DecimalToBinary(ones) << 4) | DecimalToBinary(tens); 
     }
-    SendBinaryData(binary_time, fade);
+    SendBinaryData(binary_time, fade_ticks);
   }
   // 最後一次要求顯示的 byte (Q7..Q0), 給診斷日誌用; 還沒送過是 -1
   int LastData() const { return last_time_; }
@@ -39,13 +39,13 @@ class ShiftRegister {
   int clock_pin() const { return clock_pin_; }
   int data_pin() const { return data_pin_; }
  private:
-  void SendBinaryData(int data, bool fade) {
+  void SendBinaryData(int data, uint8_t fade_ticks) {
     if(last_time_ == data){
       return;
     }
     last_time_ = data;
     if (TubeDriver::Running()) {  // 交給中斷送, 才能淡入淡出
-      TubeDriver::Show(id_, data, fade);
+      TubeDriver::Show(id_, data, fade_ticks);
       return;
     }
     // TubeDriver 還沒啟動時直接送; 暫停中斷免得被別的中斷打斷到一半

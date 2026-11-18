@@ -29,13 +29,21 @@ namespace{
   //由管子的後到前顯示數字
   const byte kTubeShowNumbers[10] = {11, 66, 22, 55, 0, 44, 77, 99, 88, 33};
 
-  // 開機動畫 (約 1.6 秒), 同時當作開機自我檢查:
-  //  1. 掃描: 6 支管子一起 0 -> 9 每個數字亮一次, 哪支管子哪個數字不亮一眼就看得出來
+  // 解碼秀 (開機一次、之後每到整點一次), 兼開機自我檢查與清管:
+  //  1. 掃描: 6 支管子一起把 0~9 每個數字亮一次 (保證每個陰極都亮到 = 清管; 開機時也方便看哪個數字不亮)
   //  2. 解碼: 亂數狂跳, 再從左到右一支一支鎖定成現在時間
   //  3. 閃斷: 整排熄滅/亮起兩下, 像舊螢幕開機
   // 要慢慢檢查每個數字, 把 kBootSweepStepMs 改成 1500 即可
   const bool kBootAnimation = true;
-  const unsigned long kBootSweepStepMs = 105;    // 掃描: 每個數字停留時間
+  const unsigned long kBootSweepStepMs = 105;    // 開機掃描: 每個數字停留時間 (0 -> 9 順序, 方便除錯)
+  const uint8_t kBootSweepDigits[10] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+
+  // 整點報時: 每隔這麼多分鐘 (在 0 秒那一刻) 跑一次解碼秀, 60 = 只在整點
+  // 取代原本每 15~30 秒的自動清管: 白天不會一直被打斷, 每個數字還是定期亮到
+  const bool kChime = true;
+  const uint8_t kChimeEveryMinutes = 60;
+  const unsigned long kChimeSweepStepMs = 80;    // 整點掃描用管子由後到前的順序, 像一層層往前推
+  const uint8_t kChimeSweepDigits[10] = {1, 6, 2, 5, 0, 4, 7, 9, 8, 3};
   const unsigned long kBootScrambleMs = 35;     // 解碼: 亂數每幾 ms 換一次
   const uint8_t kBootFramesPerLock = 4;         // 解碼: 亂跳幾次後鎖定下一支管子
   const unsigned long kBootGlitchMs = 50;       // 閃斷: 每次熄滅/亮起的時間
@@ -43,8 +51,10 @@ namespace{
 
   // 冒號 LED 呼吸燈 (軟體 PWM, 見 colon_led.h); false = 回到原本亮 1 秒暗 1 秒
   const bool kColonBreathing = true;
-  // 正常走時換數字時淡入淡出 (見 tube_driver.h, 速度調 kTicksPerLevel); false = 原本的立刻切換
+  // 換數字時淡入淡出 (見 tube_driver.h, 速度調 kFadeNormal / kFadeQuick); false = 原本的立刻切換
   const bool kDigitFade = true;
+  const uint8_t kTimeFade = kDigitFade ? TubeDriver::kFadeNormal : TubeDriver::kFadeInstant;
+  const uint8_t kCleanFade = kDigitFade ? TubeDriver::kFadeQuick : TubeDriver::kFadeInstant;
 
   // 詳細診斷日誌 ([ADD]/[SHOW] 印出 RTC 讀回值與送進 595 的位元)。
   // 9600 baud 一秒只能送約 960 個字, 打開時按住快速連加會被序列埠拖慢, 平常保持 false
@@ -83,7 +93,6 @@ NixieTubeClock::NixieTubeClock()
   : real_time_clock_(Ds1302(4/*enable_pin*/, 2/*clock_pin*/, 3/*data_pin*/)), 
     time_registers_{ ShiftRegister(Second, 6, 7, 5)/*秒*/,
       ShiftRegister(Minut, 9, 10, 8)/*分*/, ShiftRegister(Hour, 12, 13, 11)/*時*/ },
-    last_clean_tube_time_millsecond_(millis()),
     back_set_btn_(button_input_mode_back_pin_),
     front_add_btn_(button_input_add_front_pin_),
     current_mode_(ClockMode::Normal){
@@ -94,10 +103,8 @@ NixieTubeClock::NixieTubeClock()
 void NixieTubeClock::Setup(){
   back_set_btn_.Begin();
   front_add_btn_.Begin();
-  // 亂數種子要在 Serial.begin() 之後、第一次 random() 之前設定:
-  // 原本在建構子裡就印 target_time_seconds_, 那時序列埠還沒開所以第一行是亂碼, 而且每次開機都是 22
+  // 解碼秀的亂數每次開機都不一樣
   randomSeed(analogRead(kRandomSeedPin));
-  RandomizeNextCleaningTime();
 
   // 從這裡開始, 送給 595 的資料都由 Timer2 中斷送出 (淡入淡出要準時切換)
   uint8_t latch_pins[TubeDriver::kRegisters];
@@ -115,7 +122,8 @@ void NixieTubeClock::Setup(){
   FastTick::Begin();
 
   if (kBootAnimation) {
-    RunBootAnimation();
+    Serial.println("[BOOT]");
+    RunDecodeShow(kBootSweepDigits, kBootSweepStepMs);
   }
 }
 
@@ -129,16 +137,15 @@ void NixieTubeClock::ShowDigits(const uint8_t digits[6]){
   }
 }
 
-// 開機動畫, 同時是開機自我檢查 (說明見最上面的 kBootAnimation)
-void NixieTubeClock::RunBootAnimation(){
+// 解碼秀 (說明見最上面的 kBootAnimation); 約 1.5 秒, 期間不讀按鈕
+void NixieTubeClock::RunDecodeShow(const uint8_t sweep_digits[10], unsigned long sweep_step_ms){
   uint8_t digits[6];
 
   // 1. 掃描: 每支管子的 0~9 都亮過一次
-  Serial.println("[BOOT] sweep 0-9 on all tubes");
-  for (uint8_t digit = 0; digit <= 9; ++digit) {
-    memset(digits, digit, sizeof(digits));
+  for (uint8_t i = 0; i < 10; ++i) {
+    memset(digits, sweep_digits[i], sizeof(digits));
     ShowDigits(digits);
-    delay(kBootSweepStepMs);
+    delay(sweep_step_ms);
   }
 
   // 2. 解碼: 還沒鎖定的管子亂跳, 由左到右一支一支鎖定成現在時間
@@ -167,8 +174,6 @@ void NixieTubeClock::RunBootAnimation(){
     delay(kBootGlitchMs);
   }
 
-  Serial.println("[BOOT] done");
-  last_clean_tube_time_millsecond_ = millis();  // 開機動畫不算進自動清理的倒數
   ShowCurrentTime();  // 動畫期間秒數可能已經跳了, 以 RTC 為準
 }
 
@@ -188,14 +193,8 @@ void NixieTubeClock::CheckButtonStatus(){
   ProcessSettingTime();
 }
 
-void NixieTubeClock::RandomizeNextCleaningTime(){// 隨機選擇15至 30 秒 的時間
-  target_time_seconds_ = random(15, 30);
-  Serial.println("target_time_seconds_ : " + String(target_time_seconds_));
-}
-
 void NixieTubeClock::ProcessCleanTube(){
-  CheckIfExecuteCleanTubeMode();//手動清輝光管
-  AutoCleanTube();//固定時間清輝光管
+  CheckIfExecuteCleanTubeMode();//手動清輝光管 (自動清管改成整點解碼秀, 見 kChime)
   UpdateCleanTube();//非阻塞地推進清理動畫
 }
 
@@ -239,7 +238,12 @@ void NixieTubeClock::UpdateTimeIfNextSecond(){
   if(current_mode_ != ClockMode::Normal || cleaning_){
     return;//設定模式或清理管子中, 不覆蓋顯示
   }
-  SetTime(now, kDigitFade);
+  if (kChime && now.second == 0 && now.minute % kChimeEveryMinutes == 0) {
+    Serial.println("[CHIME]");
+    RunDecodeShow(kChimeSweepDigits, kChimeSweepStepMs);  // 最後會自己顯示現在時間
+    return;
+  }
+  SetTime(now, kTimeFade);
 }
 
 void NixieTubeClock::SetRealTimeClock(){
@@ -270,18 +274,6 @@ void NixieTubeClock::CheckIfExecuteCleanTubeMode(){
   }
 }
 
-void NixieTubeClock::AutoCleanTube(){
-  if(current_mode_ != ClockMode::Normal || cleaning_){
-    return;//只在正常模式下清理管子
-  }
-  const unsigned long time_diff_seconds =
-    (millis() - last_clean_tube_time_millsecond_) / 1000/*轉成秒*/;
-  // 檢查時間差是否達到清理時間
-  if (time_diff_seconds >= target_time_seconds_){
-    StartCleanTube();
-  }
-}
-
 // 清理管子改成狀態機: 原本 CleanTube() 用 delay() 卡住約 2.2 秒, 期間按鈕完全讀不到
 void NixieTubeClock::StartCleanTube(){
   cleaning_ = true;
@@ -304,8 +296,6 @@ void NixieTubeClock::UpdateCleanTube(){
   clean_step_delay_millsecond_ -= 0.9;
   if(interrupted || clean_step_ >= kTubeCleanSteps){
     cleaning_ = false;
-    last_clean_tube_time_millsecond_ = millis();
-    RandomizeNextCleaningTime();
     if(!interrupted){
       ShowCurrentTime();//清理完管子後, 馬上顯示當前時間
     }
@@ -321,13 +311,13 @@ void NixieTubeClock::ShowCleanStep(){
   now.second = show_num;
   now.minute = show_num;
   now.hour = show_num;
-  SetTime(now);
+  SetTime(now, kCleanFade);  // 每一步快速溶接到下一個數字, 看起來像在流動
 }
 
 void NixieTubeClock::ShowCurrentTime(){
   Ds1302::DateTime now;
   real_time_clock_.getDateTime(&now);
-  SetTime(now, kDigitFade);  // 清管結束、離開設定模式時也柔和地換回時間
+  SetTime(now, kTimeFade);  // 清管結束、離開設定模式時也柔和地換回時間
 }
 
 
@@ -493,8 +483,8 @@ void NixieTubeClock::SetTimeUnit(const TimeUnit unit, const int now){
   time_registers_[unit].SetClockTime(now);
 }
 
-void NixieTubeClock::SetTime(const Ds1302::DateTime& now, bool fade){
-  time_registers_[TimeUnit::Second].SetClockTime(now.second, fade);
-  time_registers_[TimeUnit::Minut].SetClockTime(now.minute, fade);
-  time_registers_[TimeUnit::Hour].SetClockTime(now.hour, fade);
+void NixieTubeClock::SetTime(const Ds1302::DateTime& now, uint8_t fade_ticks){
+  time_registers_[TimeUnit::Second].SetClockTime(now.second, fade_ticks);
+  time_registers_[TimeUnit::Minut].SetClockTime(now.minute, fade_ticks);
+  time_registers_[TimeUnit::Hour].SetClockTime(now.hour, fade_ticks);
 }

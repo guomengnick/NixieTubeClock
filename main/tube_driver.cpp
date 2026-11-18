@@ -3,8 +3,6 @@
 namespace {
   // 中斷每秒 16000 次, 3 顆 595 輪流處理 (每 8 次裡的前 3 次), 每顆每秒更新 2000 次
   const uint8_t kSlots = 16;          // 一個切換週期 16 格 = 每秒 125 輪, 看不出閃爍
-  // 新數字每 31 次 (約 15ms) 多佔一格, 16 格約 0.25 秒換完; 想要更慢更柔就調大, 更俐落就調小
-  const uint8_t kTicksPerLevel = 31;
 
   struct Register {
     volatile uint8_t* latch_port;
@@ -17,6 +15,7 @@ namespace {
     uint8_t to;            // 淡入中的新資料
     uint8_t level;         // 一個週期裡有幾格送新資料; kSlots = 換完了
     uint8_t level_ticks;
+    uint8_t ticks_per_level;  // 這次淡入的速度
     uint8_t slot;          // 目前在週期的第幾格
     int16_t sent;          // 595 裡現在鎖存的資料, -1 = 還沒送過
   };
@@ -66,18 +65,19 @@ void Begin(const uint8_t latch_pins[kRegisters], const uint8_t clock_pins[kRegis
 
 bool Running() { return g_running; }
 
-void Show(uint8_t id, uint8_t data, bool fade) {
+void Show(uint8_t id, uint8_t data, uint8_t ticks_per_level) {
   if (id >= kRegisters) {
     return;
   }
   noInterrupts();  // 跟中斷共用這些變數, 一次改完
   Register& r = g_registers[id];
-  if (fade) {
+  if (ticks_per_level != kFadeInstant) {
     // 從「目前看起來比較亮的那個」淡入新資料; 上一次還沒換完就再換, 也不會跳回更舊的數字
     r.from = r.level >= kSlots / 2 ? r.to : r.from;
     r.to = data;
     r.level = 0;
     r.level_ticks = 0;
+    r.ticks_per_level = ticks_per_level;
   } else {
     r.from = r.to = data;
     r.level = kSlots;
@@ -92,7 +92,7 @@ void Tick() {
     return;
   }
   Register& r = g_registers[tick];
-  if (r.level < kSlots && ++r.level_ticks >= kTicksPerLevel) {
+  if (r.level < kSlots && ++r.level_ticks >= r.ticks_per_level) {
     r.level_ticks = 0;
     ++r.level;
   }
