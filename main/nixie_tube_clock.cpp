@@ -3,6 +3,8 @@
 #include "nixie_tube_clock.h"
 
 #include "colon_led.h"
+#include "fast_tick.h"
+#include "tube_driver.h"
 
 namespace{
   const int button_input_mode_back_pin_ = A1;//不能只寫'1'
@@ -41,6 +43,8 @@ namespace{
 
   // 冒號 LED 呼吸燈 (軟體 PWM, 見 colon_led.h); false = 回到原本亮 1 秒暗 1 秒
   const bool kColonBreathing = true;
+  // 正常走時換數字時淡入淡出 (見 tube_driver.h, 速度調 kTicksPerLevel); false = 原本的立刻切換
+  const bool kDigitFade = true;
 
   // 詳細診斷日誌 ([ADD]/[SHOW] 印出 RTC 讀回值與送進 595 的位元)。
   // 9600 baud 一秒只能送約 960 個字, 打開時按住快速連加會被序列埠拖慢, 平常保持 false
@@ -77,8 +81,8 @@ namespace{
 
 NixieTubeClock::NixieTubeClock()
   : real_time_clock_(Ds1302(4/*enable_pin*/, 2/*clock_pin*/, 3/*data_pin*/)), 
-    time_registers_{ ShiftRegister(6, 7, 5)/*秒*/, 
-      ShiftRegister(9, 10, 8)/*分*/, ShiftRegister(12, 13, 11)/*時*/ },
+    time_registers_{ ShiftRegister(Second, 6, 7, 5)/*秒*/,
+      ShiftRegister(Minut, 9, 10, 8)/*分*/, ShiftRegister(Hour, 12, 13, 11)/*時*/ },
     last_clean_tube_time_millsecond_(millis()),
     back_set_btn_(button_input_mode_back_pin_),
     front_add_btn_(button_input_add_front_pin_),
@@ -94,11 +98,24 @@ void NixieTubeClock::Setup(){
   // 原本在建構子裡就印 target_time_seconds_, 那時序列埠還沒開所以第一行是亂碼, 而且每次開機都是 22
   randomSeed(analogRead(kRandomSeedPin));
   RandomizeNextCleaningTime();
-  if (kBootAnimation) {
-    RunBootAnimation();
+
+  // 從這裡開始, 送給 595 的資料都由 Timer2 中斷送出 (淡入淡出要準時切換)
+  uint8_t latch_pins[TubeDriver::kRegisters];
+  uint8_t clock_pins[TubeDriver::kRegisters];
+  uint8_t data_pins[TubeDriver::kRegisters];
+  for (uint8_t i = 0; i < TubeDriver::kRegisters; ++i) {
+    latch_pins[i] = time_registers_[i].latch_pin();
+    clock_pins[i] = time_registers_[i].clock_pin();
+    data_pins[i] = time_registers_[i].data_pin();
   }
+  TubeDriver::Begin(latch_pins, clock_pins, data_pins);
   if (kColonBreathing) {
     ColonLed::Begin(led_output_pin_);
+  }
+  FastTick::Begin();
+
+  if (kBootAnimation) {
+    RunBootAnimation();
   }
 }
 
@@ -222,7 +239,7 @@ void NixieTubeClock::UpdateTimeIfNextSecond(){
   if(current_mode_ != ClockMode::Normal || cleaning_){
     return;//設定模式或清理管子中, 不覆蓋顯示
   }
-  SetTime(now);
+  SetTime(now, kDigitFade);
 }
 
 void NixieTubeClock::SetRealTimeClock(){
@@ -310,7 +327,7 @@ void NixieTubeClock::ShowCleanStep(){
 void NixieTubeClock::ShowCurrentTime(){
   Ds1302::DateTime now;
   real_time_clock_.getDateTime(&now);
-  SetTime(now);
+  SetTime(now, kDigitFade);  // 清管結束、離開設定模式時也柔和地換回時間
 }
 
 
@@ -476,8 +493,8 @@ void NixieTubeClock::SetTimeUnit(const TimeUnit unit, const int now){
   time_registers_[unit].SetClockTime(now);
 }
 
-void NixieTubeClock::SetTime(const Ds1302::DateTime& now){
-  time_registers_[TimeUnit::Second].SetClockTime(now.second);
-  time_registers_[TimeUnit::Minut].SetClockTime(now.minute);
-  time_registers_[TimeUnit::Hour].SetClockTime(now.hour);
+void NixieTubeClock::SetTime(const Ds1302::DateTime& now, bool fade){
+  time_registers_[TimeUnit::Second].SetClockTime(now.second, fade);
+  time_registers_[TimeUnit::Minut].SetClockTime(now.minute, fade);
+  time_registers_[TimeUnit::Hour].SetClockTime(now.hour, fade);
 }

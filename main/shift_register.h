@@ -1,9 +1,15 @@
 #ifndef SHIFT_REGISTER_H
 #define SHIFT_REGISTER_H
+
+#include <Arduino.h>
+
+#include "tube_driver.h"
+
 class ShiftRegister {
  public:
-  ShiftRegister(int latch_pin, int clock_pin, int data_pin) :
-    latch_pin_(latch_pin), clock_pin_(clock_pin), data_pin_(data_pin),
+  // id: 這顆 595 在 TubeDriver 裡的編號 (0 秒 / 1 分 / 2 時)
+  ShiftRegister(uint8_t id, int latch_pin, int clock_pin, int data_pin) :
+    id_(id), latch_pin_(latch_pin), clock_pin_(clock_pin), data_pin_(data_pin),
     numbers_({0b0000, 0b0001, 0b0010, 0b0011, 
       0b0100, 0b0101, 0b0110, 0b0111, 0b1000, 0b1001, 0b1111}),
     last_time_(-1){
@@ -13,7 +19,8 @@ class ShiftRegister {
   }
 
   // 设置时钟显示，接收一个整数，左边的輝光管显示十位数，右边的輝光管显示个位数
-  void SetClockTime(int time) {
+  // fade = true: 從目前的數字淡入 (需要 TubeDriver 已經啟動, 否則直接切換)
+  void SetClockTime(int time, bool fade = false) {
     int binary_time;
     if(time == 255){//個位數、十位數都on 代表不顯示
       binary_time = 255;
@@ -24,18 +31,24 @@ class ShiftRegister {
       binary_time = 
           (DecimalToBinary(ones) << 4) | DecimalToBinary(tens); 
     }
-    SendBinaryData(binary_time);
+    SendBinaryData(binary_time, fade);
   }
-  // 最後一次送進 74HC595 的 byte (Q7..Q0), 給診斷日誌用; 還沒送過是 -1
+  // 最後一次要求顯示的 byte (Q7..Q0), 給診斷日誌用; 還沒送過是 -1
   int LastData() const { return last_time_; }
+  int latch_pin() const { return latch_pin_; }
+  int clock_pin() const { return clock_pin_; }
+  int data_pin() const { return data_pin_; }
  private:
-  void SendBinaryData(int data) {
+  void SendBinaryData(int data, bool fade) {
     if(last_time_ == data){
       return;
     }
     last_time_ = data;
-    // 「時」的 latch (pin 12) 也是冒號 LED, 呼吸燈的中斷會一直拉高拉低它;
-    // 送資料這約 0.1ms 先暫停中斷, 免得中途被拉高、把送到一半的資料鎖存到管子上
+    if (TubeDriver::Running()) {  // 交給中斷送, 才能淡入淡出
+      TubeDriver::Show(id_, data, fade);
+      return;
+    }
+    // TubeDriver 還沒啟動時直接送; 暫停中斷免得被別的中斷打斷到一半
     noInterrupts();
     digitalWrite(latch_pin_, LOW); // 开始数据传输
     shiftOut(data_pin_, clock_pin_, MSBFIRST, data); // 发送数据
@@ -48,6 +61,7 @@ class ShiftRegister {
     return numbers_[number];
   }
 
+  const uint8_t id_;
   const int latch_pin_; // Latch pin STCP 大平台
   const int clock_pin_; // Clock pin SHCP 活塞
   const int data_pin_;  // Data pin  DS 資料

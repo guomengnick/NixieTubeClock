@@ -58,7 +58,8 @@ class NixieTubeClock{
   void BlinkTube();
   void AdjustTime();
   void SetTimeUnit(const TimeUnit unit, const int now);
-  void SetTime(const Ds1302::DateTime& now);
+  // fade = true: 數字有變的管子淡入淡出 (正常走時用); 設定模式閃爍、清管動畫等用 false 立刻切換
+  void SetTime(const Ds1302::DateTime& now, bool fade = false);
 
  public:
   NixieTubeClock();

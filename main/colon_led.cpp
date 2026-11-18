@@ -13,8 +13,13 @@ namespace {
   uint8_t g_curve[kCurveSteps + 1];     // 吸氣曲線: 位置 0..kCurveSteps -> 亮度 0..kLevels
 }
 
-// Timer2 比較中斷, 每秒 16000 次: 每 128 次是一個 PWM 週期, 前 g_duty 次亮、其餘暗
-ISR(TIMER2_COMPA_vect) {
+namespace ColonLed {
+
+// FastTick 的中斷每秒呼叫 16000 次: 每 128 次是一個 PWM 週期, 前 g_duty 次亮、其餘暗
+void Tick() {
+  if (g_port == nullptr) {
+    return;  // 還沒 Begin(), 或呼吸燈關掉了
+  }
   static uint8_t tick = 0;
   tick = (tick + 1) & (kLevels - 1);
   if (tick < g_duty) {
@@ -24,8 +29,6 @@ ISR(TIMER2_COMPA_vect) {
   }
 }
 
-namespace ColonLed {
-
 void Begin(uint8_t pin) {
   // 呼吸曲線: 半個餘弦 (慢慢起步、慢慢收尾) 再做 gamma 校正, 開機算一次存起來, 之後只查表
   for (uint8_t i = 0; i <= kCurveSteps; ++i) {
@@ -34,16 +37,9 @@ void Begin(uint8_t pin) {
   }
 
   pinMode(pin, OUTPUT);
-  g_port = portOutputRegister(digitalPinToPort(pin));
-  g_mask = digitalPinToBitMask(pin);
-
-  // Timer2: CTC 模式, 除頻 8 -> 2MHz, 數到 125 觸發一次 -> 16kHz
   noInterrupts();
-  TCCR2A = _BV(WGM21);
-  TCCR2B = _BV(CS21);
-  OCR2A = 124;
-  TCNT2 = 0;
-  TIMSK2 = _BV(OCIE2A);
+  g_mask = digitalPinToBitMask(pin);
+  g_port = portOutputRegister(digitalPinToPort(pin));
   interrupts();
 }
 
