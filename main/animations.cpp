@@ -2,6 +2,89 @@
 
 #include "config.h"
 
+//******************************** 走梯子 ********************************
+
+// 路線上第 pos 格是梯子的第幾階: 0~9 往上, 10 以後往下 (10 -> 第 8 階 ... 18 -> 第 0 階)
+static uint8_t RungAt(uint8_t pos) {
+  return pos <= 9 ? pos : 18 - pos;
+}
+
+// 數字在梯子的第幾階
+static uint8_t RungOf(uint8_t digit) {
+  uint8_t rung = 0;
+  while (rung < 9 && kLadder[rung] != digit) {
+    ++rung;
+  }
+  return rung;
+}
+
+void LadderWalk::Start(uint8_t move_mask, unsigned long step_ms, unsigned long stagger_ms,
+                       uint8_t fade) {
+  const unsigned long now = millis();
+  step_ms_ = step_ms;
+  fade_ = fade;
+  for (uint8_t i = 0; i < 6; ++i) {
+    pos_[i] = (move_mask >> i) & 1 ? kWaiting : kLanded;
+    next_ms_[i] = now + i * stagger_ms;  // 第一格 = 跳到梯子最底下
+  }
+}
+
+bool LadderWalk::Update(Display& display, const Ds1302::DateTime& now_time) {
+  const unsigned long now = millis();
+  const uint8_t target[6] = {
+    (uint8_t)(now_time.hour / 10), (uint8_t)(now_time.hour % 10),
+    (uint8_t)(now_time.minute / 10), (uint8_t)(now_time.minute % 10),
+    (uint8_t)(now_time.second / 10), (uint8_t)(now_time.second % 10)};
+  uint8_t digit[6];
+  bool walking_pair[3] = {false, false, false};
+  bool any = false;
+  for (uint8_t i = 0; i < 6; ++i) {
+    uint8_t& pos = pos_[i];
+    if (pos != kLanded && (long)(now - next_ms_[i]) >= 0) {
+      pos = pos == kWaiting ? 0 : pos + 1;
+      // 終點會跟著時間變 (例如秒個位), 每一格都重新算
+      const uint8_t last = 18 - RungOf(target[i]);
+      if (pos >= last) {
+        pos = kLanded;
+        walking_pair[i / 2] = true;  // 到站這一格也用走梯子的淡入淡出
+      } else {
+        // 最後 kLadderSlowSteps 格越來越慢, 像電梯到站
+        const uint8_t left = last - pos;
+        unsigned long wait = step_ms_;
+        if (left <= kLadderSlowSteps) {
+          wait += (kLadderSlowSteps + 1 - left) * (step_ms_ / 2);
+        }
+        next_ms_[i] = now + wait;
+      }
+    }
+    if (pos == kLanded || pos == kWaiting) {
+      digit[i] = target[i];  // 停好 / 還沒起步: 顯示現在時間
+    } else {
+      digit[i] = kLadder[RungAt(pos)];
+      walking_pair[i / 2] = true;
+    }
+    any = any || pos != kLanded;
+  }
+  // 有管子在走的那一組用走梯子的淡入淡出; 停好的組跟平常走時一樣 (ShowPair 沒變就不會重送)
+  display.ShowPair(kHour, digit[0], digit[1], walking_pair[0] ? fade_ : kTimeFade);
+  display.ShowPair(kMinute, digit[2], digit[3], walking_pair[1] ? fade_ : kTimeFade);
+  display.ShowPair(kSecond, digit[4], digit[5], walking_pair[2] ? fade_ : kTimeFade);
+  return any;
+}
+
+uint8_t ChangedTimeTubes(const Display& display, const Ds1302::DateTime& now) {
+  const uint8_t target[4] = {
+    (uint8_t)(now.hour / 10), (uint8_t)(now.hour % 10),
+    (uint8_t)(now.minute / 10), (uint8_t)(now.minute % 10)};
+  uint8_t mask = 0;
+  for (uint8_t i = 0; i < 4; ++i) {
+    if (display.ShownDigit(i) != target[i]) {
+      mask |= 1 << i;
+    }
+  }
+  return mask;
+}
+
 //******************************** 清管 ********************************
 
 void TubeCleaner::ScheduleNext() {
@@ -17,12 +100,31 @@ bool TubeCleaner::Due() const {
 }
 
 void TubeCleaner::Start(Display& display) {
-  step_ = 0;
-  step_ms_ = kCleanFirstStepMs;
-  ShowStep(display);
+  mode_ = (Mode)random(kModeCount);
+  switch (mode_) {
+    case kFlow:
+      Serial.println(F("[CLEAN] flow"));
+      step_ = 0;
+      step_ms_ = kCleanFirstStepMs;
+      ShowFlowStep(display);
+      break;
+    case kElevator:
+      Serial.println(F("[CLEAN] elevator"));
+      walk_.Start(0x3F, kCleanElevatorStepMs, 0, kCleanElevatorFade);
+      break;
+    case kWave:
+      Serial.println(F("[CLEAN] wave"));
+      walk_.Start(0x3F, kCleanWaveStepMs, kCleanWaveStaggerMs, kCleanWaveFade);
+      break;
+    default:
+      break;
+  }
 }
 
-bool TubeCleaner::Update(Display& display) {
+bool TubeCleaner::Update(Display& display, const Ds1302::DateTime& now) {
+  if (mode_ != kFlow) {
+    return walk_.Update(display, now);
+  }
   if (millis() - step_start_ms_ < step_ms_) {
     return true;
   }
@@ -31,86 +133,17 @@ bool TubeCleaner::Update(Display& display) {
   if (step_ >= kTubeCleanSteps) {
     return false;
   }
-  ShowStep(display);
+  ShowFlowStep(display);
   return true;
 }
 
-void TubeCleaner::ShowStep(Display& display) {
+void TubeCleaner::ShowFlowStep(Display& display) {
   // 6 支管子同時顯示同一個數字 (例如 11 11 11); 快速溶接到下一步, 看起來像在流動
   const uint8_t number = kTubeShowNumbers[step_ % 10];
   display.ShowNumber(kHour, number, kCleanFade);
   display.ShowNumber(kMinute, number, kCleanFade);
   display.ShowNumber(kSecond, number, kCleanFade);
   step_start_ms_ = millis();
-}
-
-//******************************** 換字掃描 ********************************
-
-// 路線上第 pos 格是梯子的第幾階: 0~9 往上, 10 以後往下 (10 -> 第 8 階 ... 18 -> 第 0 階)
-static uint8_t RungAt(uint8_t pos) {
-  return pos <= 9 ? pos : 18 - pos;
-}
-
-bool DigitSweep::Start(Display& display, const Ds1302::DateTime& now) {
-  const uint8_t target[4] = {
-    (uint8_t)(now.hour / 10), (uint8_t)(now.hour % 10),
-    (uint8_t)(now.minute / 10), (uint8_t)(now.minute % 10)};
-  bool any = false;
-  for (uint8_t i = 0; i < 4; ++i) {
-    target_[i] = target[i];
-    pos_[i] = last_[i] = 0;
-    if (display.ShownDigit(i) == target[i]) {
-      continue;  // 沒變的管子不動
-    }
-    uint8_t rung = 0;  // 新數字在梯子的第幾階
-    while (rung < 9 && kRollLadder[rung] != target[i]) {
-      ++rung;
-    }
-    last_[i] = 18 - rung;  // 走到頂 (9) 再往下走回這一階
-    any = true;
-  }
-  if (any) {
-    for (uint8_t i = 0; i < 4; ++i) {
-      next_ms_[i] = millis() + kRollStepMs;  // 同時起步, 一起往上走
-    }
-    Show(display);  // 有變的管子先跳到最底下那個數字
-  }
-  return any;
-}
-
-bool DigitSweep::Update(Display& display) {
-  const unsigned long now = millis();
-  bool changed = false;
-  bool rolling = false;
-  for (uint8_t i = 0; i < 4; ++i) {
-    if (pos_[i] >= last_[i]) {
-      continue;  // 已經停好 (或這支沒變)
-    }
-    if ((long)(now - next_ms_[i]) >= 0) {
-      const uint8_t left = last_[i] - ++pos_[i];
-      // 最後 kRollSlowSteps 格越來越慢, 像電梯到站
-      unsigned long wait = kRollStepMs;
-      if (left > 0 && left <= kRollSlowSteps) {
-        wait += (kRollSlowSteps + 1 - left) * kRollSlowDownMs;
-      }
-      next_ms_[i] = now + wait;
-      changed = true;
-    }
-    rolling = rolling || pos_[i] < last_[i];
-  }
-  if (changed) {
-    Show(display);
-  }
-  return rolling;  // 全部停好時顯示的就是新時間
-}
-
-void DigitSweep::Show(Display& display) const {
-  uint8_t digit[4];
-  for (uint8_t i = 0; i < 4; ++i) {
-    digit[i] = last_[i] == 0 ? target_[i] : kRollLadder[RungAt(pos_[i])];
-  }
-  display.ShowPair(kHour, digit[0], digit[1], kRollFade);
-  display.ShowPair(kMinute, digit[2], digit[3], kRollFade);
 }
 
 //******************************** 解碼秀 ********************************

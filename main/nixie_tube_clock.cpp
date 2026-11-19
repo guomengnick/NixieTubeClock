@@ -125,7 +125,7 @@ void NixieTubeClock::EnterState(State next) {
       display_.ShowTime(now_, kTimeFade);  // 從別的畫面柔和地換回時間
       break;
     case State::kRolling:
-      break;  // roll_.Start() 在決定要滾的時候已經做好
+      break;  // roll_.Start() 在決定要走的時候已經做好
     case State::kCleaning:
       Serial.println(F("[MODE] clean"));
       cleaner_.Start(display_);
@@ -180,10 +180,13 @@ void NixieTubeClock::UpdateState() {
           RunDecodeShow(display_, rtc_, kChimeSweepDigits, kChimeSweepStepMs);
           break;
         }
-        if (kRollOnMinute && now_.second == 0 && roll_.Start(display_, now_)) {
-          EnterState(State::kRolling);  // 時、分交給換字掃描, 秒在 kRolling 裡照常更新
-          display_.ShowNumber(kSecond, now_.second, kTimeFade);
-          break;
+        if (kRollOnMinute && now_.second == 0) {
+          const uint8_t changed = ChangedTimeTubes(display_, now_);
+          if (changed != 0) {
+            roll_.Start(changed, kRollStepMs, 0, kRollFade);
+            EnterState(State::kRolling);  // 有變的管子走梯子, 其他照常顯示時間
+            break;
+          }
         }
         display_.ShowTime(now_, kTimeFade);
       }
@@ -193,16 +196,13 @@ void NixieTubeClock::UpdateState() {
       break;
 
     case State::kRolling:
-      if (new_second_) {
-        display_.ShowNumber(kSecond, now_.second, kTimeFade);
-      }
-      if (!roll_.Update(display_)) {
+      if (!roll_.Update(display_, now_)) {
         EnterState(State::kTime);
       }
       break;
 
     case State::kCleaning:
-      if (!cleaner_.Update(display_)) {
+      if (!cleaner_.Update(display_, now_)) {
         EnterState(State::kTime);
       }
       break;

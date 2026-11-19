@@ -56,11 +56,11 @@
 - **淡入淡出換字**、**冒號呼吸燈**：都是用 Timer2 中斷做的軟體 PWM。  
   **Crossfading digits** and a **breathing colon**, both done with software PWM on a Timer2 interrupt.
 - **換字掃描（電梯）**：換分鐘時，時、分有變的管子先跳到 0，一階一階往上走到 9，再往下走回新數字停住（例如 5 → 6：0 1 2 3 4 5 6 7 8 9 8 7 6），每個數字都亮過、順便清管。  
-  **Slot-machine roll**: on each new minute, the hour/minute tubes that change spin through at least one full cycle, slow down and land on the new digit, left to right.
+  **Digit sweep (elevator)**: on each new minute, every hour/minute tube that changes jumps to 0, climbs to 9, then steps back down to its new digit (e.g. 5 → 6: 0 1 2 … 9 8 7 6).
 - **亮度**：電流不變，只縮短每輪亮的時間（每秒 133 輪），輝光一樣包滿陰極；損耗大致跟亮度成正比。  
   **Brightness**: same current, shorter on-time per cycle (133 Hz), so the glow still covers the whole cathode; wear scales roughly with brightness.
-- **自動清管**：每 15~60 秒把每個數字快速亮過兩輪（約 1.2 秒），防止陰極中毒。  
-  **Anti-poisoning**: every 15–60 s each digit is cycled twice (≈1.2 s).
+- **自動清管**：每 1~3 分鐘讓每支管子的 0~9 都亮過，防止陰極中毒。每次隨機挑一種動畫：流動（6 支一起快速流過兩輪）、電梯（一起慢慢從 0 走到 9 再走回現在時間）、波浪（由左到右一支接一支走）。兩顆按鈕一起按 1 秒也一樣隨機。  
+  **Anti-poisoning**: every 1–3 min every digit of every tube is lit, using a randomly chosen animation (flow / elevator / wave).
 
 ### USB 對時與誤差補償 | USB Time Sync and Drift Compensation
 

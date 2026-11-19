@@ -52,15 +52,24 @@ const uint8_t kBrightnessStep = 5;      // = TubeDriver 一格, 剛好不用四�
 const int kBrightnessEepromAddress = 64;  // EEPROM 0 開始的那段給 drift_comp 用
 
 //******************************** 清管 ********************************
-// 自動清管 (防陰極中毒): 每隔 15~60 秒 (隨機) 把每個數字快速亮過兩輪
-// 每步 70ms 起、每步快 1ms -> 一次約 1.2 秒
-const unsigned long kAutoCleanMinSeconds = 15;
-const unsigned long kAutoCleanMaxSeconds = 60;
+// 自動清管 (防陰極中毒): 每隔 1~3 分鐘 (隨機) 讓每支管子的 0~9 都亮過; 兩顆按鈕一起按 1 秒也會清。
+// 每次隨機挑一種動畫 (見 animations.h): 流動 約 1.2 秒 / 電梯、波浪 約 2~2.6 秒
+// 真正需要清的是時十位 (3~9)、分十位和秒十位 (6~9) 這些平常不亮的數字
+const unsigned long kAutoCleanMinSeconds = 60;
+const unsigned long kAutoCleanMaxSeconds = 180;
+// 流動: 6 支一起顯示同一個數字, 每步 70ms 起、每步快 1ms
 const uint8_t kTubeCleanSteps = 20;     // 10 個數字 x 2 輪, 每個數字亮的時間一樣
 const unsigned long kCleanFirstStepMs = 70;
 const unsigned long kCleanStepSpeedUpMs = 1;
-// 清管時每一步顯示的數字 (時分秒都一樣), 由管子的後到前
+// 流動時每一步顯示的數字 (時分秒都一樣), 由管子的後到前
 const byte kTubeShowNumbers[10] = {11, 66, 22, 55, 0, 44, 77, 99, 88, 33};
+// 電梯: 6 支一起慢慢走梯子 (0 -> 9 -> 現在時間), 淡入淡出約 0.1 秒, 數字像融化一樣接過去
+const unsigned long kCleanElevatorStepMs = 110;
+const uint8_t kCleanElevatorFade = 14;
+// 波浪: 由左到右一支接一支走梯子
+const unsigned long kCleanWaveStepMs = 80;
+const unsigned long kCleanWaveStaggerMs = 160;  // 下一支晚多久起步
+const uint8_t kCleanWaveFade = 8;
 
 //******************************** 解碼秀 ********************************
 // 開機、USB 對時後各跑一次 (要的話也可以整點跑, 見 kChime), 兼開機自我檢查與清管:
@@ -76,7 +85,7 @@ const uint8_t kBootFramesPerLock = 4;         // 解碼: 亂跳幾次後鎖定�
 const unsigned long kBootGlitchMs = 50;       // 閃斷: 每次熄滅/亮起的時間
 
 // 整點報時: 每隔這麼多分鐘 (在 0 秒那一刻) 跑一次解碼秀, 60 = 只在整點
-const bool kChime = false;  // 已經有每 15~60 秒的自動清管, 預設關閉; 想要整點報時改 true
+const bool kChime = false;  // 已經有每 1~3 分鐘的自動清管, 預設關閉; 想要整點報時改 true
 const uint8_t kChimeEveryMinutes = 60;
 const unsigned long kChimeSweepStepMs = 80;
 const uint8_t kChimeSweepDigits[10] = {1, 6, 2, 5, 0, 4, 7, 9, 8, 3};  // 由管子後到前, 像一層層往前推
@@ -93,18 +102,19 @@ const uint8_t kCleanFade = kDigitFade ? TubeDriver::kFadeQuick : TubeDriver::kFa
 // 顯示日期時再短按一下可以提早回去
 const unsigned long kDateShowMs = 3000;
 
-// 換字掃描 (電梯): 每分鐘 0 秒換分鐘時, 數字有變的管子 (時、分) 先跳到梯子最底下,
-// 一階一階往上走到頂, 再往下走回新數字, 最後幾格慢下來停住。例如 5 -> 6:
+// 換字掃描 (電梯): 每分鐘 0 秒換分鐘時, 數字有變的管子 (時、分) 走一次梯子:
+// 先跳到梯子最底下, 一階一階往上走到頂, 再往下走回新數字, 最後幾格慢下來停住。例如 5 -> 6:
 //   0 1 2 3 4 5 6 7 8 9 8 7 6
 // 每個數字都亮過 (順便清管); 好幾支一起變時同時往上走, 往下時各自停在自己的新數字。
 // 秒的管子照常淡入淡出。false = 跟秒一樣直接淡入
 //   新數字 9 最快 (只往上) 約 0.5 秒; 新數字 0 最久 (上去再下來) 約 1 秒
 const bool kRollOnMinute = true;
-// 梯子: 由下到上的順序。想照管子裡陰極實際的前後排列走, 可以改成 {1, 6, 2, 5, 0, 4, 7, 9, 8, 3} (後 -> 前)
-const uint8_t kRollLadder[10] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
 const unsigned long kRollStepMs = 45;     // 每一階停留時間
-const uint8_t kRollSlowSteps = 3;         // 最後幾格放慢
-const unsigned long kRollSlowDownMs = 25; // 放慢時每格多停多久 (45 -> 70 -> 95 -> 120ms)
+
+// 梯子 (換字掃描、清管的電梯和波浪共用): 由下到上的順序。
+// 想照管子裡陰極實際的前後排列走, 可以改成 {1, 6, 2, 5, 0, 4, 7, 9, 8, 3} (後 -> 前)
+const uint8_t kLadder[10] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+const uint8_t kLadderSlowSteps = 3;  // 最後幾格放慢, 每格多停半階 (45ms -> 67 -> 90 -> 112ms)
 const uint8_t kRollFade = kDigitFade ? 4 : TubeDriver::kFadeInstant;  // 約 0.03 秒, 一格一格看得清楚
 
 //******************************** 時間 ********************************

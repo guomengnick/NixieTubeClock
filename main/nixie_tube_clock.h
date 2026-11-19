@@ -17,7 +17,7 @@
 //   狀態            怎麼進來                       怎麼離開 (都回到 kTime)
 //   kTime           開機、其他狀態結束
 //   kRolling        kTime 每分鐘 0 秒              4 支管子都停好
-//   kCleaning       每 15~60 秒 / 兩顆一起按 1 秒   清完
+//   kCleaning       每 1~3 分鐘 / 兩顆一起按 1 秒   清完 (每次隨機挑一種動畫)
 //   kDate           短按 front                     3 秒 / 再短按一次
 //   kSetSecond..    長按 back 2 秒 (back 循環 秒->分->時)   8 秒沒按
 //   kSetBrightness  長按 front 2 秒                5 秒沒按
@@ -75,7 +75,7 @@ class NixieTubeClock {
   Display display_;
   ButtonInput buttons_;
   TubeCleaner cleaner_;
-  DigitSweep roll_;
+  LadderWalk roll_;  // 換分鐘掃描
 
   State state_ = State::kTime;
   unsigned long state_start_ms_ = 0;    // 進入目前狀態的時間
