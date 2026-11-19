@@ -19,13 +19,11 @@ A hand-built clock using an Arduino Nano, six IN-12 nixie tubes and a DS1302 RTC
 - **USB 一鍵對時，並自動學習、補償 DS1302 的快慢**。  
   **One-click USB time sync, with automatic learning and correction of DS1302 drift.**
 
-<!-- GIF 放這裡 | GIFs go here
-| 換分鐘電梯 Elevator | 清管接力 Relay cleaning |
-|---|---|
-| ![elevator](GIF連結) | ![relay](GIF連結) |
-| 開機解碼秀 Boot decode | 看日期 Date |
-| ![boot](GIF連結) | ![date](GIF連結) |
--->
+| 換分鐘 Minute change | 開機 Boot |
+|:---:|:---:|
+| ![換分鐘 Minute change](docs/gif/minute-sweep.gif) | ![開機 Boot](docs/gif/boot.gif) |
+| **看日期 Date** | **清管（有好幾種模式）Cleaning (several modes)** |
+| ![看日期 Date](docs/gif/date.gif) | ![清管 Cleaning](docs/gif/clean.gif) |
 
 ## 目錄 | Contents
 
