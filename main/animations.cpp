@@ -44,48 +44,51 @@ void TubeCleaner::ShowStep(Display& display) {
   step_start_ms_ = millis();
 }
 
-//******************************** 滾輪換字 ********************************
+//******************************** 換字掃描 ********************************
 
-bool SlotRoll::Start(const Display& display, const Ds1302::DateTime& now) {
+// 路線上第 pos 格是梯子的第幾階: 0~9 往上, 10 以後往下 (10 -> 第 8 階 ... 18 -> 第 0 階)
+static uint8_t RungAt(uint8_t pos) {
+  return pos <= 9 ? pos : 18 - pos;
+}
+
+bool DigitSweep::Start(Display& display, const Ds1302::DateTime& now) {
   const uint8_t target[4] = {
     (uint8_t)(now.hour / 10), (uint8_t)(now.hour % 10),
     (uint8_t)(now.minute / 10), (uint8_t)(now.minute % 10)};
-  uint8_t min_steps = kRollMinSteps;
   bool any = false;
   for (uint8_t i = 0; i < 4; ++i) {
-    const uint8_t shown = display.ShownDigit(i);
-    digit_[i] = target[i];
-    steps_left_[i] = 0;
-    if (shown == target[i]) {
+    target_[i] = target[i];
+    pos_[i] = last_[i] = 0;
+    if (display.ShownDigit(i) == target[i]) {
       continue;  // 沒變的管子不動
     }
-    const uint8_t from = shown <= 9 ? shown : target[i];  // 原本不亮就從新數字滾一整圈
-    // 從舊數字一格一格往上 (9 -> 0 繞回來), 至少 min_steps 格, 剛好停在新數字
-    uint8_t steps = min_steps;
-    while ((from + steps) % 10 != target[i]) {
-      ++steps;
+    uint8_t rung = 0;  // 新數字在梯子的第幾階
+    while (rung < 9 && kRollLadder[rung] != target[i]) {
+      ++rung;
     }
-    digit_[i] = from;
-    steps_left_[i] = steps;
-    next_ms_[i] = millis();               // 第一格馬上動
-    min_steps = steps + kRollStaggerSteps;  // 右邊那支比這支晚停
+    last_[i] = 18 - rung;  // 走到頂 (9) 再往下走回這一階
     any = true;
+  }
+  if (any) {
+    for (uint8_t i = 0; i < 4; ++i) {
+      next_ms_[i] = millis() + kRollStepMs;  // 同時起步, 一起往上走
+    }
+    Show(display);  // 有變的管子先跳到最底下那個數字
   }
   return any;
 }
 
-bool SlotRoll::Update(Display& display) {
+bool DigitSweep::Update(Display& display) {
   const unsigned long now = millis();
   bool changed = false;
   bool rolling = false;
   for (uint8_t i = 0; i < 4; ++i) {
-    if (steps_left_[i] == 0) {
-      continue;
+    if (pos_[i] >= last_[i]) {
+      continue;  // 已經停好 (或這支沒變)
     }
     if ((long)(now - next_ms_[i]) >= 0) {
-      digit_[i] = (digit_[i] + 1) % 10;
-      const uint8_t left = --steps_left_[i];
-      // 最後 kRollSlowSteps 格越來越慢, 像滾輪停下來
+      const uint8_t left = last_[i] - ++pos_[i];
+      // 最後 kRollSlowSteps 格越來越慢, 像電梯到站
       unsigned long wait = kRollStepMs;
       if (left > 0 && left <= kRollSlowSteps) {
         wait += (kRollSlowSteps + 1 - left) * kRollSlowDownMs;
@@ -93,13 +96,21 @@ bool SlotRoll::Update(Display& display) {
       next_ms_[i] = now + wait;
       changed = true;
     }
-    rolling = rolling || steps_left_[i] > 0;
+    rolling = rolling || pos_[i] < last_[i];
   }
   if (changed) {
-    display.ShowPair(kHour, digit_[0], digit_[1], kRollFade);
-    display.ShowPair(kMinute, digit_[2], digit_[3], kRollFade);
+    Show(display);
   }
   return rolling;  // 全部停好時顯示的就是新時間
+}
+
+void DigitSweep::Show(Display& display) const {
+  uint8_t digit[4];
+  for (uint8_t i = 0; i < 4; ++i) {
+    digit[i] = last_[i] == 0 ? target_[i] : kRollLadder[RungAt(pos_[i])];
+  }
+  display.ShowPair(kHour, digit[0], digit[1], kRollFade);
+  display.ShowPair(kMinute, digit[2], digit[3], kRollFade);
 }
 
 //******************************** 解碼秀 ********************************

@@ -55,7 +55,7 @@
   **Boot animation**: sweeps 0–9 (a quick self-test), then scrambles and locks onto the current time left to right.
 - **淡入淡出換字**、**冒號呼吸燈**：都是用 Timer2 中斷做的軟體 PWM。  
   **Crossfading digits** and a **breathing colon**, both done with software PWM on a Timer2 interrupt.
-- **滾輪換字**：換分鐘時，時、分有變的管子像吃角子老虎一樣往上滾至少一整圈，最後放慢停在新數字，多支時由左到右一支一支停。  
+- **換字掃描（電梯）**：換分鐘時，時、分有變的管子先跳到 0，一階一階往上走到 9，再往下走回新數字停住（例如 5 → 6：0 1 2 3 4 5 6 7 8 9 8 7 6），每個數字都亮過、順便清管。  
   **Slot-machine roll**: on each new minute, the hour/minute tubes that change spin through at least one full cycle, slow down and land on the new digit, left to right.
 - **亮度**：電流不變，只縮短每輪亮的時間（每秒 133 輪），輝光一樣包滿陰極；損耗大致跟亮度成正比。  
   **Brightness**: same current, shorter on-time per cycle (133 Hz), so the glow still covers the whole cathode; wear scales roughly with brightness.
@@ -81,7 +81,7 @@ You can also type in the serial monitor (9600 baud, newline): `?` to query, `T20
 | `main/config.h` | 所有可調的設定與腳位 / every tunable setting and pin |
 | `main/nixie_tube_clock.*` | 主邏輯：狀態機 (走時、看日期、設定時間/亮度)、USB 對時 / main logic: state machine (time, date, time/brightness setting), USB sync |
 | `main/display.*` | 6 支管子要顯示什麼數字 / which digit each of the 6 tubes shows |
-| `main/animations.*` | 清管、滾輪換字、解碼秀 / cleaning, slot-machine roll, decode show |
+| `main/animations.*` | 清管、換字掃描、解碼秀 / cleaning, digit sweep, decode show |
 | `main/button_input.h`, `main/button.h` | 兩顆按鈕 -> 短按/長按/一起按事件、防抖 / button gestures (tap, hold, both) and debounce |
 | `main/tube_driver.*` | 中斷送 595：淡入淡出、亮度 / interrupt-driven 595 output: fades, brightness |
 | `main/colon_led.*`, `main/fast_tick.*` | 冒號呼吸燈、Timer2 16 kHz 中斷 / breathing colon, Timer2 16 kHz interrupt |

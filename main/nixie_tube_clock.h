@@ -32,7 +32,7 @@ class NixieTubeClock {
   enum class State : uint8_t {
     // 「正常」這一組: 看得到時間或時間相關的畫面, 按鈕手勢都一樣
     kTime,           // 正常走時
-    kRolling,        // 換分鐘滾輪
+    kRolling,        // 換分鐘掃描 (電梯)
     kCleaning,       // 清管動畫
     kDate,           // 短按 front 看日期
     // 設定
@@ -75,7 +75,7 @@ class NixieTubeClock {
   Display display_;
   ButtonInput buttons_;
   TubeCleaner cleaner_;
-  SlotRoll roll_;
+  DigitSweep roll_;
 
   State state_ = State::kTime;
   unsigned long state_start_ms_ = 0;    // 進入目前狀態的時間

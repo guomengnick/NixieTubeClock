@@ -93,16 +93,18 @@ const uint8_t kCleanFade = kDigitFade ? TubeDriver::kFadeQuick : TubeDriver::kFa
 // 顯示日期時再短按一下可以提早回去
 const unsigned long kDateShowMs = 3000;
 
-// 滾輪換字 (吃角子老虎): 每分鐘 0 秒換分鐘時, 數字有變的管子 (時、分) 快速往上滾,
-// 至少滾一整圈 (0~9 每個都亮過, 順便清管), 最後幾格慢下來「喀」一聲停在新數字;
-// 有好幾支一起變時由左到右一支一支停。秒的管子照常淡入淡出。false = 跟秒一樣淡入
-//   一般換分鐘 (1 支) 約 0.5~0.9 秒; 整點像 12:59 -> 13:00 (3 支) 約 1 秒; 最久 23:59 -> 00:00 約 1.8 秒
+// 換字掃描 (電梯): 每分鐘 0 秒換分鐘時, 數字有變的管子 (時、分) 先跳到梯子最底下,
+// 一階一階往上走到頂, 再往下走回新數字, 最後幾格慢下來停住。例如 5 -> 6:
+//   0 1 2 3 4 5 6 7 8 9 8 7 6
+// 每個數字都亮過 (順便清管); 好幾支一起變時同時往上走, 往下時各自停在自己的新數字。
+// 秒的管子照常淡入淡出。false = 跟秒一樣直接淡入
+//   新數字 9 最快 (只往上) 約 0.5 秒; 新數字 0 最久 (上去再下來) 約 1 秒
 const bool kRollOnMinute = true;
-const unsigned long kRollStepMs = 40;     // 滾動時每格停留時間
-const uint8_t kRollMinSteps = 10;         // 第一支至少滾幾格 (10 = 一整圈)
-const uint8_t kRollStaggerSteps = 3;      // 下一支至少比上一支多滾幾格 -> 一支一支停
+// 梯子: 由下到上的順序。想照管子裡陰極實際的前後排列走, 可以改成 {1, 6, 2, 5, 0, 4, 7, 9, 8, 3} (後 -> 前)
+const uint8_t kRollLadder[10] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+const unsigned long kRollStepMs = 45;     // 每一階停留時間
 const uint8_t kRollSlowSteps = 3;         // 最後幾格放慢
-const unsigned long kRollSlowDownMs = 25; // 放慢時每格多停多久 (40 -> 65 -> 90 -> 115ms)
+const unsigned long kRollSlowDownMs = 25; // 放慢時每格多停多久 (45 -> 70 -> 95 -> 120ms)
 const uint8_t kRollFade = kDigitFade ? 4 : TubeDriver::kFadeInstant;  // 約 0.03 秒, 一格一格看得清楚
 
 //******************************** 時間 ********************************

@@ -154,7 +154,7 @@ void NixieTubeClock::EnterState(State next) {
 
 void NixieTubeClock::HandleInput() {
   if (IsNormal(state_)) {
-    // 「正常」這一組的手勢都一樣, 不管現在是走時、滾輪、清管還是看日期
+    // 「正常」這一組的手勢都一樣, 不管現在是走時、換字掃描、清管還是看日期
     if (buttons_.Has(ButtonInput::kBothHold)) {
       EnterState(State::kCleaning);
     } else if (buttons_.Has(ButtonInput::kBackHold)) {
@@ -181,7 +181,7 @@ void NixieTubeClock::UpdateState() {
           break;
         }
         if (kRollOnMinute && now_.second == 0 && roll_.Start(display_, now_)) {
-          EnterState(State::kRolling);  // 時、分交給滾輪, 秒在 kRolling 裡照常更新
+          EnterState(State::kRolling);  // 時、分交給換字掃描, 秒在 kRolling 裡照常更新
           display_.ShowNumber(kSecond, now_.second, kTimeFade);
           break;
         }
