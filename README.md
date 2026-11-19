@@ -481,8 +481,20 @@ Most of this can be cross-checked against the pin definitions in `main/config.h`
    - 在接觸不良等情況下，按鈕可能讓 Nano 多耗電。時鐘連續開超過半天時，偶爾會出現分或秒的數字不亮或亂跳；改用 USB 直接供電給 Nano 後就恢復正常。所以我推測，按鈕的參考電壓不應該直接接在 Nano 板上。  
      With a poor contact, the buttons may have drawn extra current from the Nano. After running for more than half a day, the minute or second digits sometimes went blank or jumped around; powering the Nano straight from USB fixed it. My guess is that the buttons' reference voltage shouldn't come directly from the Nano.
 
-   總結：Nano 的電源最好只負責核心工作（讀時間、控制 74HC595、讀按鈕），不要再掛額外的負載，系統才會穩定。現在的韌體也會對按鈕做防抖，偶爾的雜訊不會被當成按下。  
-   In short: keep the Nano's supply for the core work (reading the time, driving the 74HC595s, reading buttons) and avoid extra loads. The firmware now also debounces the buttons, so occasional noise isn't treated as a press.
+   總結：Nano 的電源最好只負責核心工作（讀時間、控制 74HC595、讀按鈕），不要再掛額外的負載，系統才會穩定。  
+   In short: keep the Nano's supply for the core work (reading the time, driving the 74HC595s, reading buttons) and avoid extra loads.
+
+   **後來怎麼解決的（按了沒反應）**：查到最後，主因其實在程式，不在硬體。  
+   **How "presses not registering" was finally fixed**: the main cause turned out to be the code, not the hardware.
+
+   | 原因 Cause | 改法 Fix |
+   |---|---|
+   | 舊程式用 `analogRead() < 50` 判斷按下，要降到約 0.24V 以下才算數；按鈕接觸稍差、只降到 0.5V 就被漏掉<br>The old code required `analogRead() < 50` (below ~0.24V), so a press that only dropped to ~0.5V was missed | 改用 `digitalRead()`，低於約 1.5V 就算按下，並開啟內建上拉，腳位不會浮空<br>Switched to `digitalRead()`, which treats anything below ~1.5V as pressed, with the internal pull-up on so the pin never floats |
+   | 清管動畫用 `delay()` 卡住約 2 秒，這段時間完全讀不到按鈕<br>The cleaning animation blocked for ~2 s with `delay()`, so buttons weren't read at all | 動畫全部改成不卡住的寫法，任何時候按都有反應<br>All animations are now non-blocking, so buttons respond at any time |
+   | 微動開關放開時彈跳很久，按一下被算成兩下<br>The micro switch bounces for a long time on release, so one press counted as two | 讀值要穩定 50ms 才算數，放開後 120ms 內不接受新的按下<br>A reading must be stable for 50 ms, and a new press isn't accepted within 120 ms of a release |
+
+   程式在 [`main/button.h`](main/button.h)（防抖、判斷按下）和 [`main/button_input.h`](main/button_input.h)（把按法分成短按、長按、兩顆一起按）。「數字不亮或亂跳」那一點是供電問題，韌體修不了，上面的硬體建議還是適用。  
+   The code is in [`main/button.h`](main/button.h) (debounce and press detection) and [`main/button_input.h`](main/button_input.h) (tap / hold / both-held gestures). The "digits blank or jumping" issue is a power problem the firmware can't fix, so the hardware advice above still applies.
 
 
 
