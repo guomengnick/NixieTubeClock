@@ -12,32 +12,42 @@
 // 走梯子 (電梯): 要走的管子先跳到梯子最底下, 一階一階往上走到頂, 再往下走回現在時間的數字停住。
 // 例如 5 -> 6: 0 1 2 3 4 5 6 7 8 9 8 7 6。梯子的順序見 config.h 的 kLadder。
 // 停好的、不用走的管子跟著時間走 (秒照樣跳), 所以播完時畫面就是現在時間, 不會「跳」回來。
-// 換分鐘掃描、清管的電梯和波浪都是用這個。
+// 換分鐘掃描、清管的電梯、波浪、接力都是用這個, 差別只在 Style。
 class LadderWalk {
  public:
+  struct Style {
+    unsigned long step_ms;        // 每一階停多久
+    unsigned long stagger_ms;     // 每往右一支晚多久起步 (0 = 一起走, >0 = 由左到右的波浪)
+    unsigned long rare_dwell_ms;  // 往上走時「平常不會亮的數字」改停這麼久 (0 = 跟一般一樣)
+    uint8_t fade;                 // 每一階的淡入淡出
+    bool descend;                 // true = 走到頂再一階一階走回時間; false = 到頂直接淡回時間
+    bool relay;                   // true = 一次只走一支, 前一支到站下一支才起步 (stagger_ms 不用)
+  };
   // move_mask: 第 i 個 bit = 第 i 支管子要走 (0 = 最左, 時十位)
-  // stagger_ms: 每往右一支晚多久起步 (0 = 一起走, >0 = 由左到右的波浪)
-  void Start(uint8_t move_mask, unsigned long step_ms, unsigned long stagger_ms, uint8_t fade);
+  void Start(uint8_t move_mask, const Style& style);
   bool Update(Display& display, const Ds1302::DateTime& now);  // 回傳 false = 全部停好
 
  private:
   static const uint8_t kLanded = 255;   // pos_: 已經停好 / 不用走
-  static const uint8_t kWaiting = 254;  // pos_: 還沒輪到起步 (波浪)
+  static const uint8_t kWaiting = 254;  // pos_: 時間到就起步
+  static const uint8_t kQueued = 253;   // pos_: 接力, 等前一支到站
 
   uint8_t pos_[6];            // 走到路線上第幾格: 0~9 往上, 10~18 往下
   unsigned long next_ms_[6];  // 下一格的時間
-  unsigned long step_ms_ = 0;
-  uint8_t fade_ = 0;
+  Style style_;
 };
 
 // 換分鐘時, 時、分 4 支管子裡數字會變的那幾支 (給 LadderWalk 的 move_mask); 0 = 都沒變
 uint8_t ChangedTimeTubes(const Display& display, const Ds1302::DateTime& now);
 
-// 清管 (防陰極中毒): 每支管子的 0~9 都亮一次就達到效果, 所以每次隨機挑一種動畫:
+// 清管 (防陰極中毒): 每次隨機挑一種動畫, 手動按也一樣:
 //   流動: 6 支一起顯示同一個數字, 快速流過兩輪 (清完淡回時間)
-//   電梯: 6 支一起慢慢走梯子, 數字融化接過去, 最後停在現在時間
+//   電梯: 6 支一起走梯子, 數字融化接過去, 最後停在現在時間
 //   波浪: 由左到右一支接一支走梯子, 像水波掃過去, 最後停在現在時間
-// 另外負責排「下一次自動清管」的時間
+//   接力: 一次只有一支從 0 走到 9, 到頂淡回時間, 同時下一支接著走; 其他管子照常顯示時間,
+//         所以每個數字可以停久一點, 清得最徹底, 又一直看得到時間
+// 電梯、波浪、接力往上走時, 「平常不會亮的數字」(時十位 3~9、分十位和秒十位 6~9) 會多停一下,
+// 因為真正需要清的就是它們。另外負責排「下一次自動清管」的時間
 class TubeCleaner {
  public:
   void ScheduleNext();  // 從現在起隨機 kAutoCleanMinSeconds~kAutoCleanMaxSeconds 秒後再清
@@ -46,7 +56,7 @@ class TubeCleaner {
   bool Update(Display& display, const Ds1302::DateTime& now);
 
  private:
-  enum Mode : uint8_t { kFlow, kElevator, kWave, kModeCount };
+  enum Mode : uint8_t { kFlow, kElevator, kWave, kRelay, kModeCount };
   void ShowFlowStep(Display& display);
 
   Mode mode_ = kFlow;

@@ -183,7 +183,8 @@ void NixieTubeClock::UpdateState() {
         if (kRollOnMinute && now_.second == 0) {
           const uint8_t changed = ChangedTimeTubes(display_, now_);
           if (changed != 0) {
-            roll_.Start(changed, kRollStepMs, 0, kRollFade);
+            static const LadderWalk::Style kSweepStyle = {kRollStepMs, 0, 0, kRollFade, true, false};
+            roll_.Start(changed, kSweepStyle);
             EnterState(State::kRolling);  // 有變的管子走梯子, 其他照常顯示時間
             break;
           }
