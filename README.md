@@ -93,8 +93,8 @@ A hand-built clock using an Arduino Nano, six IN-12 nixie tubes and a DS1302 RTC
   **Digit sweep (elevator)**: on each new minute, every hour/minute tube that changes jumps to 0, climbs to 9, then steps back down to its new digit (e.g. 5 → 6: 0 1 2 … 9 8 7 6). Currently off by default; set `kRollOnMinute` to `true` in `config.h` to turn it on.
 - **亮度**：電流不變，只縮短每輪亮的時間（每秒 133 輪），輝光一樣包滿陰極；損耗大致跟亮度成正比。  
   **Brightness**: same current, shorter on-time per cycle (133 Hz), so the glow still covers the whole cathode; wear scales roughly with brightness.
-- **自動清管**：每 1~3 分鐘讓每支管子的 0~9 都亮過，防止陰極中毒。每次隨機挑一種動畫：流動（6 支一起快速流過兩輪）、電梯（6 支同步從 0 走到 9，平常不會亮的數字 6 支一起停，再走回現在時間）、波浪（由左到右一支接一支走）、接力（一次只有一支從 0 走到 9，到頂淡回時間、下一支接著走，其他管子照常顯示時間）。平常不會亮的數字（時十位 3~9、分十位和秒十位 6~9）會多停一下，因為真正需要清的是它們。兩顆按鈕一起按 1 秒也一樣隨機。  
-  **Anti-poisoning**: every 1–3 min every digit of every tube is lit, using a randomly chosen animation (flow / elevator / wave / relay); digits a 24-hour clock never shows get extra dwell time.
+- **自動清管**：每 1~3 分鐘讓每支管子的 0~9 都亮過，防止陰極中毒。每次隨機挑一種動畫，都是 6 支一起跑：流動（快速流過兩輪）、電梯（從 0 走到 9 再走回現在時間）、波浪（由左到右一支晚一點起步）、慢爬（從 0 慢慢爬到 9，到頂淡回時間）。平常不會亮的數字（時十位 3~9、分十位和秒十位 6~9）會多停一下，因為真正需要清的是它們。兩顆按鈕一起按 1 秒也一樣隨機。  
+  **Anti-poisoning**: every 1–3 min every digit of every tube is lit, using a randomly chosen animation where all six tubes move together (flow / elevator / wave / slow climb); digits a 24-hour clock never shows get extra dwell time.
 
 ### USB 對時與誤差補償 | USB Time Sync and Drift Compensation
 

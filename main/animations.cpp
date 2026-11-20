@@ -25,16 +25,13 @@ void LadderWalk::Start(uint8_t move_mask, const Style& style) {
   const unsigned long now = millis();
   style_ = style;
   together_max_ = 9;
-  bool first = true;
   for (uint8_t i = 0; i < 6; ++i) {
     if (!((move_mask >> i) & 1)) {
       pos_[i] = kLanded;
       continue;
     }
-    // 接力: 只有第一支馬上起步, 其他排隊; 不是接力: 依 stagger 由左到右起步
-    pos_[i] = style.relay && !first ? kQueued : kWaiting;
-    next_ms_[i] = now + (style.relay ? 0 : i * style.stagger_ms);  // 第一格 = 跳到梯子最底下
-    first = false;
+    pos_[i] = kWaiting;
+    next_ms_[i] = now + i * style.stagger_ms;  // 依 stagger 由左到右起步; 第一格 = 跳到梯子最底下
     if (kNormalMaxDigit[i] < together_max_) {
       together_max_ = kNormalMaxDigit[i];
     }
@@ -50,22 +47,15 @@ bool LadderWalk::Update(Display& display, const Ds1302::DateTime& now_time) {
   uint8_t digit[6];
   bool walking_pair[3] = {false, false, false};
   bool any = false;
-  bool hand_off = false;  // 接力: 這一格有管子到站, 排隊的下一支馬上起步
   for (uint8_t i = 0; i < 6; ++i) {
     uint8_t& pos = pos_[i];
-    if (pos == kQueued && hand_off) {
-      pos = kWaiting;
-      next_ms_[i] = now;
-      hand_off = false;
-    }
-    if (pos != kLanded && pos != kQueued && (long)(now - next_ms_[i]) >= 0) {
+    if (pos != kLanded && (long)(now - next_ms_[i]) >= 0) {
       pos = pos == kWaiting ? 0 : pos + 1;
       // 終點: 往下走回時間的數字 (會跟著時間變, 例如秒個位, 所以每一格都重新算); 不往下走就是到頂的下一格
       const uint8_t last = style_.descend ? 18 - RungOf(target[i]) : 10;
       if (pos >= last) {
         pos = kLanded;
         walking_pair[i / 2] = true;  // 到站這一格也用走梯子的淡入淡出
-        hand_off = style_.relay;
       } else {
         const uint8_t shown = kLadder[RungAt(pos)];
         unsigned long wait = style_.step_ms;
@@ -82,7 +72,7 @@ bool LadderWalk::Update(Display& display, const Ds1302::DateTime& now_time) {
         next_ms_[i] = now + wait;
       }
     }
-    if (pos == kLanded || pos == kWaiting || pos == kQueued) {
+    if (pos == kLanded || pos == kWaiting) {
       digit[i] = target[i];  // 停好 / 還沒起步: 顯示現在時間
     } else {
       digit[i] = kLadder[RungAt(pos)];
@@ -125,12 +115,13 @@ bool TubeCleaner::Due() const {
 }
 
 void TubeCleaner::Start(Display& display) {
+  // 清管的 3 種走梯子都是 together: 6 支管子一起停在平常不會亮的數字
   static const LadderWalk::Style kElevatorStyle = {
-    kCleanElevatorStepMs, 0, kCleanRareDwellMs, kCleanElevatorFade, true, false, true};
+    kCleanElevatorStepMs, 0, kCleanRareDwellMs, kCleanElevatorFade, true, true};
   static const LadderWalk::Style kWaveStyle = {
-    kCleanWaveStepMs, kCleanWaveStaggerMs, kCleanRareDwellMs, kCleanWaveFade, true, false, false};
-  static const LadderWalk::Style kRelayStyle = {
-    kCleanRelayStepMs, 0, kCleanRelayRareDwellMs, kCleanRelayFade, false, true, false};
+    kCleanWaveStepMs, kCleanWaveStaggerMs, kCleanRareDwellMs, kCleanWaveFade, true, true};
+  static const LadderWalk::Style kClimbStyle = {
+    kCleanClimbStepMs, 0, kCleanClimbRareDwellMs, kCleanClimbFade, false, true};
   mode_ = (Mode)random(kModeCount);
   switch (mode_) {
     case kFlow:
@@ -147,9 +138,9 @@ void TubeCleaner::Start(Display& display) {
       Serial.println(F("[CLEAN] wave"));
       walk_.Start(0x3F, kWaveStyle);
       break;
-    case kRelay:
-      Serial.println(F("[CLEAN] relay"));
-      walk_.Start(0x3F, kRelayStyle);
+    case kClimb:
+      Serial.println(F("[CLEAN] climb"));
+      walk_.Start(0x3F, kClimbStyle);
       break;
     default:
       break;

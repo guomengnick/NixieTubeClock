@@ -53,7 +53,7 @@ const int kBrightnessEepromAddress = 64;  // EEPROM 0 開始的那段給 drift_c
 
 //******************************** 清管 ********************************
 // 自動清管 (防陰極中毒): 每隔 1~3 分鐘 (隨機) 讓每支管子的 0~9 都亮過; 兩顆按鈕一起按 1 秒也會清。
-// 每次隨機挑一種動畫 (見 animations.h): 流動 約 1.2 秒 / 電梯 約 4 秒 / 波浪 約 3.5 秒 / 接力 約 16 秒 (一直看得到時間)
+// 每次隨機挑一種動畫 (見 animations.h), 都是 6 支一起跑: 流動 約 1.2 秒 / 電梯 約 4 秒 / 波浪 約 4 秒 / 慢爬 約 5.3 秒
 // 平常不會亮的數字每小時平均各亮約 11 秒 (原本每 15~60 秒清一次的流動是約 11 秒, 現在打斷看時間的次數少很多)
 // 真正需要清的是時十位 (3~9)、分十位和秒十位 (6~9) 這些平常不亮的數字
 const unsigned long kAutoCleanMinSeconds = 60;
@@ -68,15 +68,16 @@ const byte kTubeShowNumbers[10] = {11, 66, 22, 55, 0, 44, 77, 99, 88, 33};
 // 往上時 6 支同步, 3~9 每個數字 6 支一起停 kCleanRareDwellMs
 const unsigned long kCleanElevatorStepMs = 110;
 const uint8_t kCleanElevatorFade = 14;
-// 波浪: 由左到右一支接一支走梯子
+// 波浪: 由左到右一支晚一點起步走梯子; 3~9 每支都停 kCleanRareDwellMs, 波形不會散掉
 const unsigned long kCleanWaveStepMs = 80;
 const unsigned long kCleanWaveStaggerMs = 160;  // 下一支晚多久起步
 const uint8_t kCleanWaveFade = 8;
-// 接力: 一次只有一支管子從 0 走到 9, 到頂淡回時間, 同時下一支接著走; 其他 5 支照常顯示時間
-const unsigned long kCleanRelayStepMs = 120;
-const unsigned long kCleanRelayRareDwellMs = 700;  // 接力時一直看得到時間, 罕用數字可以停更久
-const uint8_t kCleanRelayFade = 12;
-// 電梯、波浪往上走時, 「平常不會亮的數字」(時十位 3~9、分十位和秒十位 6~9) 每個停這麼久 (一般數字停一階)
+// 慢爬: 6 支一起從 0 慢慢爬到 9, 到頂淡回時間; 3~9 每個數字 6 支一起停 kCleanClimbRareDwellMs
+const unsigned long kCleanClimbStepMs = 120;
+const unsigned long kCleanClimbRareDwellMs = 700;
+const uint8_t kCleanClimbFade = 12;
+// 電梯、波浪往上走時, 「平常不會亮的數字」每個停這麼久 (一般數字停一階)。
+// 真正要清的是時十位 3~9、分十位和秒十位 6~9; 6 支要同步, 所以 3~9 都停
 const unsigned long kCleanRareDwellMs = 350;
 
 //******************************** 解碼秀 ********************************
