@@ -8,8 +8,8 @@ A hand-built clock using an Arduino Nano, six IN-12 nixie tubes and a DS1302 RTC
 
 ## 功能一覽 | Features at a Glance
 
-- **換分鐘電梯效果**：有變的管子從 0 走到 9，再走回新數字。  
-  **Elevator digit change**: every tube that changes climbs from 0 to 9, then steps back down to the new digit.
+- **換分鐘電梯效果**：有變的管子從 0 走到 9，再走回新數字（目前預設關閉，見 `config.h` 的 `kRollOnMinute`）。  
+  **Elevator digit change**: every tube that changes climbs from 0 to 9, then steps back down to the new digit (currently off by default; see `kRollOnMinute` in `config.h`).
 - **四種清管動畫隨機輪播**：防止陰極中毒，平常不會亮的數字會多亮一下。  
   **Four random anti-poisoning animations**: digits the clock never normally shows get extra glow time.
 - **淡入淡出換字、冒號呼吸燈、開機解碼秀**。  
@@ -89,11 +89,11 @@ A hand-built clock using an Arduino Nano, six IN-12 nixie tubes and a DS1302 RTC
   **Boot animation**: sweeps 0–9 (a quick self-test), then scrambles and locks onto the current time left to right.
 - **淡入淡出換字**、**冒號呼吸燈**：都是用 Timer2 中斷做的軟體 PWM。  
   **Crossfading digits** and a **breathing colon**, both done with software PWM on a Timer2 interrupt.
-- **換字掃描（電梯）**：換分鐘時，時、分有變的管子先跳到 0，一階一階往上走到 9，再往下走回新數字停住（例如 5 → 6：0 1 2 3 4 5 6 7 8 9 8 7 6），每個數字都亮過、順便清管。  
-  **Digit sweep (elevator)**: on each new minute, every hour/minute tube that changes jumps to 0, climbs to 9, then steps back down to its new digit (e.g. 5 → 6: 0 1 2 … 9 8 7 6).
+- **換字掃描（電梯）**：換分鐘時，時、分有變的管子先跳到 0，一階一階往上走到 9，再往下走回新數字停住（例如 5 → 6：0 1 2 3 4 5 6 7 8 9 8 7 6），每個數字都亮過、順便清管。目前預設關閉，`config.h` 的 `kRollOnMinute` 改成 `true` 就會打開。  
+  **Digit sweep (elevator)**: on each new minute, every hour/minute tube that changes jumps to 0, climbs to 9, then steps back down to its new digit (e.g. 5 → 6: 0 1 2 … 9 8 7 6). Currently off by default; set `kRollOnMinute` to `true` in `config.h` to turn it on.
 - **亮度**：電流不變，只縮短每輪亮的時間（每秒 133 輪），輝光一樣包滿陰極；損耗大致跟亮度成正比。  
   **Brightness**: same current, shorter on-time per cycle (133 Hz), so the glow still covers the whole cathode; wear scales roughly with brightness.
-- **自動清管**：每 1~3 分鐘讓每支管子的 0~9 都亮過，防止陰極中毒。每次隨機挑一種動畫：流動（6 支一起快速流過兩輪）、電梯（一起從 0 走到 9 再走回現在時間）、波浪（由左到右一支接一支走）、接力（一次只有一支從 0 走到 9，到頂淡回時間、下一支接著走，其他管子照常顯示時間）。平常不會亮的數字（時十位 3~9、分十位和秒十位 6~9）會多停一下，因為真正需要清的是它們。兩顆按鈕一起按 1 秒也一樣隨機。  
+- **自動清管**：每 1~3 分鐘讓每支管子的 0~9 都亮過，防止陰極中毒。每次隨機挑一種動畫：流動（6 支一起快速流過兩輪）、電梯（6 支同步從 0 走到 9，平常不會亮的數字 6 支一起停，再走回現在時間）、波浪（由左到右一支接一支走）、接力（一次只有一支從 0 走到 9，到頂淡回時間、下一支接著走，其他管子照常顯示時間）。平常不會亮的數字（時十位 3~9、分十位和秒十位 6~9）會多停一下，因為真正需要清的是它們。兩顆按鈕一起按 1 秒也一樣隨機。  
   **Anti-poisoning**: every 1–3 min every digit of every tube is lit, using a randomly chosen animation (flow / elevator / wave / relay); digits a 24-hour clock never shows get extra dwell time.
 
 ### USB 對時與誤差補償 | USB Time Sync and Drift Compensation
@@ -102,8 +102,8 @@ A hand-built clock using an Arduino Nano, six IN-12 nixie tubes and a DS1302 RTC
    Connect the clock over USB and double-click `tools/sync_time.bat` (it finds the CH340 port automatically; close the Arduino IDE serial monitor first).
 2. 腳本在整秒那一刻送出電腦時間，時鐘先顯示日期再解碼成新時間，腳本會印出對時前快/慢了幾秒。  
    The script sends the PC time on the exact second; the clock shows the date, then decodes to the new time, and the script prints how far off it was.
-3. **兩次對時隔 3 天以上**，時鐘就會算出 DS1302 每天快/慢多少，之後自己定期撥秒修正（關機期間的誤差開機時補回），資料存在 EEPROM。之後偶爾對時會繼續修正速率。  
-   **Two syncs at least 3 days apart** let the clock learn how many seconds per day its DS1302 drifts; it then corrects itself (including time spent powered off) and stores the rate in EEPROM. Later syncs keep refining the rate.
+3. **兩次對時隔 3 天以上**（差很多的話，隔 20 小時以上且差了 20 秒以上就夠），時鐘就會算出 DS1302 每天快/慢多少，之後自己定期撥秒修正（關機期間的誤差開機時補回），資料存在 EEPROM。之後偶爾對時會繼續修正速率。  
+   **Two syncs at least 3 days apart** (or 20+ hours apart if it drifted 20+ seconds) let the clock learn how many seconds per day its DS1302 drifts; it then corrects itself (including time spent powered off) and stores the rate in EEPROM. Later syncs keep refining the rate.
 
 也可以在序列埠監控視窗（9600 baud，行尾選「換行」）手動輸入：`?` 查詢時間、`T2026-11-18 10:00:00` 設定時間。  
 You can also type in the serial monitor (9600 baud, newline): `?` to query, `T2026-11-18 10:00:00` to set.

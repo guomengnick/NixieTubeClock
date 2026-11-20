@@ -83,7 +83,11 @@ class NixieTubeClock {
 
   Ds1302::DateTime now_;        // 這一輪 loop 讀到的時間
   bool new_second_ = false;     // 這一輪剛跳秒
-  uint8_t last_second_ = 255;
+  uint8_t last_second_ = 255;   // 255 = 還沒讀過
+  // 少讀 RTC (見 config.h 的 kRtcQuietMs): 抓到跳秒的時刻, 之後休息到快下一秒
+  unsigned long second_start_ms_ = 0;  // 抓到跳秒的 millis()
+  unsigned long rtc_read_ms_ = 0;      // 上一次讀 RTC 的 millis()
+  bool second_edge_known_ = false;     // 確定 second_start_ms_ 就是跳秒那一刻; 寫過 RTC 就要重抓
   unsigned long breath_start_ms_ = 0;  // 冒號呼吸燈: 這次呼吸開始的時間
 
   unsigned long blink_start_ms_ = 0;      // 設定時間: 閃爍從什麼時候開始算

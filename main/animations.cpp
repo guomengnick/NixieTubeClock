@@ -24,6 +24,7 @@ static const uint8_t kNormalMaxDigit[6] = {2, 9, 5, 9, 5, 9};
 void LadderWalk::Start(uint8_t move_mask, const Style& style) {
   const unsigned long now = millis();
   style_ = style;
+  together_max_ = 9;
   bool first = true;
   for (uint8_t i = 0; i < 6; ++i) {
     if (!((move_mask >> i) & 1)) {
@@ -34,6 +35,9 @@ void LadderWalk::Start(uint8_t move_mask, const Style& style) {
     pos_[i] = style.relay && !first ? kQueued : kWaiting;
     next_ms_[i] = now + (style.relay ? 0 : i * style.stagger_ms);  // 第一格 = 跳到梯子最底下
     first = false;
+    if (kNormalMaxDigit[i] < together_max_) {
+      together_max_ = kNormalMaxDigit[i];
+    }
   }
 }
 
@@ -65,12 +69,14 @@ bool LadderWalk::Update(Display& display, const Ds1302::DateTime& now_time) {
       } else {
         const uint8_t shown = kLadder[RungAt(pos)];
         unsigned long wait = style_.step_ms;
-        if (pos <= 9 && shown > kNormalMaxDigit[i] && style_.rare_dwell_ms > wait) {
-          wait = style_.rare_dwell_ms;  // 平常不會亮的數字多停一下
+        const uint8_t normal_max = style_.together ? together_max_ : kNormalMaxDigit[i];
+        if (pos <= 9 && shown > normal_max && style_.rare_dwell_ms > wait) {
+          wait = style_.rare_dwell_ms;  // 平常不會亮的數字多停一下 (together: 大家一起停, 保持同步)
         }
         // 往下走回時間時, 最後 kLadderSlowSteps 格越來越慢, 像電梯到站
+        // (together 往上時不放慢, 不然新數字是 7~9 的那支會在往上途中跟大家錯開)
         const uint8_t left = last - pos;
-        if (style_.descend && left <= kLadderSlowSteps) {
+        if (style_.descend && left <= kLadderSlowSteps && !(style_.together && pos <= 9)) {
           wait += (kLadderSlowSteps + 1 - left) * (style_.step_ms / 2);
         }
         next_ms_[i] = now + wait;
@@ -120,11 +126,11 @@ bool TubeCleaner::Due() const {
 
 void TubeCleaner::Start(Display& display) {
   static const LadderWalk::Style kElevatorStyle = {
-    kCleanElevatorStepMs, 0, kCleanRareDwellMs, kCleanElevatorFade, true, false};
+    kCleanElevatorStepMs, 0, kCleanRareDwellMs, kCleanElevatorFade, true, false, true};
   static const LadderWalk::Style kWaveStyle = {
-    kCleanWaveStepMs, kCleanWaveStaggerMs, kCleanRareDwellMs, kCleanWaveFade, true, false};
+    kCleanWaveStepMs, kCleanWaveStaggerMs, kCleanRareDwellMs, kCleanWaveFade, true, false, false};
   static const LadderWalk::Style kRelayStyle = {
-    kCleanRelayStepMs, 0, kCleanRelayRareDwellMs, kCleanRelayFade, false, true};
+    kCleanRelayStepMs, 0, kCleanRelayRareDwellMs, kCleanRelayFade, false, true, false};
   mode_ = (Mode)random(kModeCount);
   switch (mode_) {
     case kFlow:

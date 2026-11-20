@@ -22,6 +22,7 @@ class LadderWalk {
     uint8_t fade;                 // 每一階的淡入淡出
     bool descend;                 // true = 走到頂再一階一階走回時間; false = 到頂直接淡回時間
     bool relay;                   // true = 一次只走一支, 前一支到站下一支才起步 (stagger_ms 不用)
+    bool together;                // true = 往上時大家同步: 只要對其中一支是罕用數字, 全部一起停
   };
   // move_mask: 第 i 個 bit = 第 i 支管子要走 (0 = 最左, 時十位)
   void Start(uint8_t move_mask, const Style& style);
@@ -35,6 +36,7 @@ class LadderWalk {
   uint8_t pos_[6];            // 走到路線上第幾格: 0~9 往上, 10~18 往下
   unsigned long next_ms_[6];  // 下一格的時間
   Style style_;
+  uint8_t together_max_ = 9;  // together: 要走的管子裡「平常最大數字」最小的那個, 比它大就大家一起停
 };
 
 // 換分鐘時, 時、分 4 支管子裡數字會變的那幾支 (給 LadderWalk 的 move_mask); 0 = 都沒變
@@ -42,7 +44,7 @@ uint8_t ChangedTimeTubes(const Display& display, const Ds1302::DateTime& now);
 
 // 清管 (防陰極中毒): 每次隨機挑一種動畫, 手動按也一樣:
 //   流動: 6 支一起顯示同一個數字, 快速流過兩輪 (清完淡回時間)
-//   電梯: 6 支一起走梯子, 數字融化接過去, 最後停在現在時間
+//   電梯: 6 支一起走梯子, 數字融化接過去, 最後停在現在時間; 往上時 6 支同步, 罕用數字 6 支一起停
 //   波浪: 由左到右一支接一支走梯子, 像水波掃過去, 最後停在現在時間
 //   接力: 一次只有一支從 0 走到 9, 到頂淡回時間, 同時下一支接著走; 其他管子照常顯示時間,
 //         所以每個數字可以停久一點, 清得最徹底, 又一直看得到時間

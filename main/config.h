@@ -64,7 +64,8 @@ const unsigned long kCleanFirstStepMs = 70;
 const unsigned long kCleanStepSpeedUpMs = 1;
 // 流動時每一步顯示的數字 (時分秒都一樣), 由管子的後到前
 const byte kTubeShowNumbers[10] = {11, 66, 22, 55, 0, 44, 77, 99, 88, 33};
-// 電梯: 6 支一起慢慢走梯子 (0 -> 9 -> 現在時間), 淡入淡出約 0.1 秒, 數字像融化一樣接過去
+// 電梯: 6 支一起慢慢走梯子 (0 -> 9 -> 現在時間), 淡入淡出約 0.1 秒, 數字像融化一樣接過去;
+// 往上時 6 支同步, 3~9 每個數字 6 支一起停 kCleanRareDwellMs
 const unsigned long kCleanElevatorStepMs = 110;
 const uint8_t kCleanElevatorFade = 14;
 // 波浪: 由左到右一支接一支走梯子
@@ -115,7 +116,7 @@ const unsigned long kDateShowMs = 3000;
 // 每個數字都亮過 (順便清管); 好幾支一起變時同時往上走, 往下時各自停在自己的新數字。
 // 秒的管子照常淡入淡出。false = 跟秒一樣直接淡入
 //   新數字 9 最快 (只往上) 約 0.5 秒; 新數字 0 最久 (上去再下來) 約 1 秒
-const bool kRollOnMinute = true;
+const bool kRollOnMinute = false;  // 先關掉, 想要再改回 true
 const unsigned long kRollStepMs = 45;     // 每一階停留時間
 
 // 梯子 (換字掃描、清管的電梯和波浪共用): 由下到上的順序。
@@ -126,6 +127,12 @@ const uint8_t kRollFade = kDigitFade ? 4 : TubeDriver::kFadeInstant;  // 約 0.0
 
 //******************************** 時間 ********************************
 const uint8_t kRtcWriteTries = 3;            // 寫 RTC 後讀回不一致就重寫, 最多寫這麼多次
+// 讀 DS1302 時 SCLK 一直跳, 雜訊容易灌進旁邊的 32.768kHz 石英, 讓時鐘跑快, 所以不要每圈都讀:
+// 抓到跳秒之後休息 kRtcQuietMs (這段時間秒數不會變), 快到下一秒才每 kRtcPollMs 讀一次。
+// 原本每秒讀上千次, 現在約 25 次, 跳秒還是在 kRtcPollMs 內就抓到
+const unsigned long kRtcQuietMs = 900;
+const unsigned long kRtcPollMs = 4;
+const unsigned long kRtcEdgeMaxGapMs = 20;  // 上一次讀在這麼近以內, 才確定「剛跳秒」, 可以開始休息
 const unsigned long kSyncDateShowMs = 1200;  // USB 對時成功: 先顯示日期 (YY MM DD) 這麼久, 再解碼成時間
 // 誤差補償 (見 drift_comp.h): 每分鐘的這一秒檢查要不要撥 1 秒; 避開 59->00, 不會牽動分鐘
 const bool kDriftCompensation = true;

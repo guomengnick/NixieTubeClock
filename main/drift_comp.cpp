@@ -3,14 +3,18 @@
 #include <EEPROM.h>
 
 namespace {
-  const uint8_t kMagic = 0xD7;   // EEPROM 沒寫過是 0xFF, 對不上就當第一次用
+  // EEPROM 沒寫過是 0xFF, 對不上就當第一次用。
+  // 0xD7 -> 0xD8: 改成少讀 RTC 之後 DS1302 的快慢可能不一樣了, 舊的量測作廢, 重新學
+  const uint8_t kMagic = 0xD8;
   const int kEepromAddress = 0;  // 目前 EEPROM 只有這裡在用
   const uint32_t kNone = 0;      // 錨點 = 0 表示沒有
 
   const uint32_t kMinLearnSeconds = 3UL * 86400UL;    // 至少隔 3 天才算速率 (對時本身有約 1 秒誤差)
+  const uint32_t kQuickLearnSeconds = 20UL * 3600UL;  // 誤差大的話隔 20 小時就先算 (之後越學越準)
+  const long kQuickLearnDrift = 20;                   // ...累積差到這麼多秒才算大 (1 秒誤差 = 5%)
   const uint32_t kMaxLearnSeconds = 30UL * 86400UL;   // 累積滿 30 天重新量
   const uint32_t kMaxCorrectSpan = 400UL * 86400UL;   // 錨點超過這麼久 (或在未來) 就不補, 多半是 RTC 被重設
-  const long kMaxRatePpb = 500000L;                   // 500 ppm = 每天 43 秒; 超過一定是量錯
+  const long kMaxRatePpb = 2000000L;                  // 2000 ppm = 每天 173 秒; 超過一定是量錯
   const long kApplyThresholdMs = 600;                 // 誤差超過 0.6 秒才撥, 撥完剩不到 0.5 秒, 不會來回撥
 
   struct Stored {
@@ -84,7 +88,8 @@ SyncInfo OnSync(uint32_t now, long drift) {
   } else {
     g.learn_raw += info.raw_drift;
     const uint32_t learn_span = now - g.learn_anchor;
-    if (learn_span >= kMinLearnSeconds) {
+    if (learn_span >= kMinLearnSeconds ||
+        (learn_span >= kQuickLearnSeconds && labs(g.learn_raw) >= kQuickLearnDrift)) {
       long rate = (long)RoundDiv((int64_t)g.learn_raw * 1000000000LL, learn_span);
       g.rate_ppb = constrain(rate, -kMaxRatePpb, kMaxRatePpb);
       g.has_rate = 1;

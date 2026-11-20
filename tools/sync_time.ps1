@@ -129,7 +129,7 @@ try {
             Write-Host "這段期間時鐘已經自動$how; 沒有補償的話會$rawText。"
         }
         if ($rate -eq 'none') {
-            Write-Host "誤差補償: 還在量速率 (這一輪已累積 $learnDays 天, 要 3 天以上; 下次對時隔 3 天以上就會開始自動補償)。" -ForegroundColor Yellow
+            Write-Host "誤差補償: 還在量速率 (這一輪已累積 $learnDays 天; 下次對時隔 3 天以上, 或隔 20 小時以上且差了 20 秒以上, 就會開始自動補償)。" -ForegroundColor Yellow
         } else {
             $secPerDay = [long]$rate * 86400 / 1e9
             $dir = if ($secPerDay -ge 0) { '快' } else { '慢' }

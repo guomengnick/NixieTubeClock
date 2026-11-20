@@ -234,9 +234,23 @@ void NixieTubeClock::UpdateState() {
 
 //******************************** 時間、冒號、日誌 ********************************
 
+// 不每圈都讀 RTC (雜訊會讓 DS1302 跑快, 見 config.h 的 kRtcQuietMs); 休息的時候 now_ 就是上次讀到的
 void NixieTubeClock::ReadClock() {
-  rtc_.getDateTime(&now_);
-  new_second_ = now_.second != last_second_;
+  const unsigned long ms = millis();
+  new_second_ = false;
+  const bool resting = second_edge_known_ && ms - second_start_ms_ < kRtcQuietMs;
+  if (!resting && ms - rtc_read_ms_ >= kRtcPollMs) {
+    const unsigned long gap = ms - rtc_read_ms_;
+    rtc_read_ms_ = ms;
+    rtc_.getDateTime(&now_);
+    new_second_ = now_.second != last_second_;
+    if (new_second_) {
+      // 上一次讀是幾 ms 前、那時還是舊的秒 -> 剛好抓到跳秒, 可以放心休息到快下一秒;
+      // 否則 (剛開機、隔太久才讀) 不確定是不是剛跳, 繼續一直讀, 等下一次跳秒
+      second_edge_known_ = last_second_ != 255 && gap <= kRtcEdgeMaxGapMs;
+      second_start_ms_ = ms;
+    }
+  }
   UpdateColon();
   if (new_second_ && kDriftCompensation && now_.second == kDriftFixSecond && IsNormal(state_)) {
     ApplyDriftCompensation(&now_);  // 剛跳秒就撥, 不會吃掉零頭
@@ -392,6 +406,7 @@ void NixieTubeClock::AdjustTime() {
 
   // 寫進 RTC 後馬上讀回來確認; 不一致就重寫, 日誌會留下紀錄
   uint8_t readback = 0;
+  second_edge_known_ = false;  // 寫過 RTC, 跳秒的時刻可能變了, 重抓
   for (uint8_t attempt = 1; attempt <= kRtcWriteTries; ++attempt) {
     rtc_.setDateTime(&now);
     Ds1302::DateTime check;
@@ -534,6 +549,7 @@ void NixieTubeClock::InitRtc() {
 // 寫進 RTC 後讀回確認 (秒數允許差 1, 寫完剛好跳秒), 不一致就重寫
 bool NixieTubeClock::WriteRtcVerified(const Ds1302::DateTime& time) {
   Ds1302::DateTime writable = time;
+  second_edge_known_ = false;  // 寫過 RTC, 跳秒的時刻可能變了, 重抓
   for (uint8_t attempt = 1; attempt <= kRtcWriteTries; ++attempt) {
     rtc_.setDateTime(&writable);
     Ds1302::DateTime check;
@@ -571,7 +587,7 @@ void NixieTubeClock::ApplyDriftCompensation(Ds1302::DateTime* now) {
 // 印出目前的速率, 例如 "[DRIFT] rate +23150 ppb (+2.00 s/day)"
 void NixieTubeClock::PrintDriftRate() {
   if (!DriftComp::HasRate()) {
-    Serial.println(F("[DRIFT] rate not measured yet (needs 2 USB syncs >= 3 days apart)"));
+    Serial.println(F("[DRIFT] rate not measured yet (needs 2 USB syncs >= 3 days apart, or >= 20 h if off by 20+ s)"));
     return;
   }
   const long ppb = DriftComp::RatePpb();
